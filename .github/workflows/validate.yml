@@ -1,0 +1,22 @@
+name: Validate
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements*
+      - run: pip install -r backend/requirements-dev.txt
+      - run: pytest -q
+      - name: Validate shell scripts
+        run: bash -n scripts/*.sh database/init/*.sh
+      - name: Validate Compose
+        run: docker compose --env-file .env.example config --quiet
+      - name: Build production image
+        run: docker build -t orchestra-saas:ci .

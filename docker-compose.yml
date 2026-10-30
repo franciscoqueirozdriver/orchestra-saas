@@ -81,6 +81,7 @@ services:
     build: .
     restart: unless-stopped
     environment:
+      RUN_MIGRATIONS: "false"
       DATABASE_URL: postgresql+psycopg://${APP_DB_USER:-orquestra_app}:${APP_DB_PASSWORD}@db:5432/${POSTGRES_DB:-orquestra}
       REDIS_URL: redis://redis:6379/0
       JWT_SECRET: ${JWT_SECRET:?Defina JWT_SECRET em .env}

@@ -2,9 +2,9 @@
 
 **Atualizado em 30/10/2026.** O roteiro assume que você já contratou o plano KVM 2 e quer hospedar o MVP Orquestra. Os nomes dos botões do hPanel podem variar ligeiramente.
 
-## Primeiro: corrigir o erro de Python que você enviou
+## Testes locais opcionais
 
-O log indica Python 3.9. A criação do ambiente virtual falhou porque falta o pacote `venv`; depois disso, `pip install` parece ter iniciado fora de um ambiente virtual e instalado pacotes no diretório `~/.local`. Se esse comando ainda estiver executando, interrompa-o com `Ctrl+C`. Não tente remover esses pacotes do Python global.
+A implantação usa Docker; não instale as dependências da aplicação no Python global da VPS. Para testes fora dos contêineres, use Python 3.12 e um ambiente virtual.
 
 O projeto usa Python 3.12 dentro do Docker e requer ao menos Python 3.10 para testes locais. O caminho mais simples para testar localmente é Ubuntu 24.04 com Python 3.12:
 
@@ -12,7 +12,6 @@ O projeto usa Python 3.12 dentro do Docker e requer ao menos Python 3.10 para te
 sudo apt update
 sudo apt install -y python3.12-venv
 cd ~/Documentos/orchestra-saas
-rm -rf .venv
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
@@ -237,28 +236,16 @@ O IP retornado deve ser o da VPS. Substitua `app.seudominio.com` em todas as eta
 
 ## 7. Transferir o projeto e iniciar os serviços
 
-Baixe o arquivo [Orquestra SaaS MVP — ZIP](/home/ubuntu/orquestra-saas-mvp.zip) para seu computador. Em macOS/Linux, envie-o por SSH:
+Instale Git na VPS e clone o repositório como usuário `orquestra`:
 
 ```bash
-scp -i ~/.ssh/orquestra_hostinger ~/Downloads/orquestra-saas-mvp.zip orquestra@IP_DA_VPS:/tmp/
-```
-
-No Windows PowerShell:
-
-```powershell
-scp -i "$env:USERPROFILE\.ssh\orquestra_hostinger" "$env:USERPROFILE\Downloads\orquestra-saas-mvp.zip" orquestra@IP_DA_VPS:/tmp/
-```
-
-Conecte-se à VPS como `orquestra` e extraia o projeto em `/opt/orquestra`:
-
-```bash
-sudo test ! -e /opt/orquestra
-sudo unzip -q /tmp/orquestra-saas-mvp.zip -d /opt
-sudo mv /opt/orquestra-saas /opt/orquestra
-sudo chown -R orquestra:orquestra /opt/orquestra
+sudo apt install -y git python3 openssl
+sudo install -d -o orquestra -g orquestra -m 750 /opt/orquestra
+git clone https://github.com/franciscoqueirozdriver/orchestra-saas.git /opt/orquestra
 cd /opt/orquestra
-chmod +x scripts/*.sh database/init/01-app-user.sh
 ```
+
+Se o repositório for privado, configure uma deploy key SSH de leitura no GitHub e use `git@github.com:franciscoqueirozdriver/orchestra-saas.git`. Não grave tokens no endereço remoto.
 
 Gere as senhas e chaves locais, informando a origem pública HTTPS quando solicitado:
 
@@ -272,7 +259,7 @@ Valide a configuração e suba o sistema:
 
 ```bash
 docker compose config --quiet
-docker compose up -d --build
+./scripts/deploy.sh
 docker compose ps
 docker compose logs --tail=80 db api worker web
 ```
@@ -292,6 +279,18 @@ docker compose exec api python -m app.bootstrap
 ```
 
 Depois acesse `https://app.seudominio.com`, crie a empresa/tenant e configure as próprias credenciais Z-API e IA pelo painel. Não há usuário ou senha padrão. A auto-resposta permanece desativada por padrão. Faça primeiro um teste manual com número/instância sob seu controle.
+
+## Atualizar uma instalação existente
+
+Execute como `orquestra` em `/opt/orquestra`, com a árvore Git limpa:
+
+```bash
+./scripts/backup.sh
+git pull --ff-only origin main
+./scripts/deploy.sh
+```
+
+O deploy constrói a imagem antes de interromper os processos de aplicação. Para evitar tarefas durante migrações, para API e worker, inicia a API (que aplica Alembic), aguarda saúde e depois inicia worker e web. Há uma breve indisponibilidade. Se falhar, consulte `docker compose ps -a` e `docker compose logs --tail=100 api worker web`; não apague volumes. Uma reversão de código após migração exige avaliar compatibilidade ou restaurar o backup em janela de manutenção.
 
 ## 8. Agendar e proteger backups
 
@@ -316,7 +315,7 @@ O backup de banco e `app_data` **não inclui `.env`**. Guarde `.env`, passphrase
 - Não abra 5432, 6379 ou 8000 no firewall e não publique essas portas no Compose.
 - Não desligue autenticação por senha/root antes de testar a chave SSH em uma segunda sessão.
 - Não ative auto-resposta para clientes reais antes de homologar Z-API, consentimento, opt-out, limites de envio e políticas de dados. Esses controles ainda são pendentes no MVP.
-- Não torne o repositório GitHub público enquanto não revisar segredos, dados, dependências e licença. GitHub privado é opcional; para este primeiro deploy, copiar o ZIP por SCP é suficiente.
+- Nunca versione `.env`, chaves privadas ou backups no GitHub.
 
 ## Referências oficiais
 

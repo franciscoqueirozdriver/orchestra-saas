@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+umask 077
 cd "$(dirname "$0")/.."
 if [ -e .env ]; then
   echo ".env já existe; não será sobrescrito." >&2

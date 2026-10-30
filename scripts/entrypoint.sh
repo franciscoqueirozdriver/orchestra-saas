@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
 python -m app.wait_for_db
-alembic upgrade head
+if [ "${RUN_MIGRATIONS:-true}" = "true" ]; then
+  alembic upgrade head
+fi
 exec "$@"

@@ -13,8 +13,8 @@ RUN apt-get update \
     && useradd --system --uid 10001 --gid app --home-dir /home/app --create-home --shell /usr/sbin/nologin app \
     && mkdir -p /app/data/media
 
-COPY backend/requirements.txt /app/requirements.txt
-RUN pip install --upgrade pip && pip install -r /app/requirements.txt
+COPY backend/requirements.lock /app/requirements.lock
+RUN pip install -r /app/requirements.lock
 
 COPY backend/ /app/
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh

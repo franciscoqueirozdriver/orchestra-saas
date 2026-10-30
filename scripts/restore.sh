@@ -12,7 +12,7 @@ if [[ -f "$BACKUP_ENV_FILE" ]]; then set -a; source "$BACKUP_ENV_FILE"; set +a; 
 
 # Valida a senha de backup e os formatos antes de parar a aplicação.
 openssl enc -d -aes-256-cbc -pbkdf2 -iter 250000 -salt -md sha256 -pass env:BACKUP_PASSPHRASE -in "$DB_BACKUP" \
-  | docker compose exec -T db sh -c 'pg_restore --list -' >/dev/null
+  | docker compose exec -T db sh -c 'pg_restore --list' >/dev/null
 if [[ -n "$DATA_BACKUP" ]]; then
   openssl enc -d -aes-256-cbc -pbkdf2 -iter 250000 -salt -md sha256 -pass env:BACKUP_PASSPHRASE -in "$DATA_BACKUP" | tar -tzf - >/dev/null
 fi
@@ -25,7 +25,7 @@ read -r -p "Digite RESTAURAR para continuar: " CONFIRM
 
 docker compose stop api worker
 openssl enc -d -aes-256-cbc -pbkdf2 -iter 250000 -salt -md sha256 -pass env:BACKUP_PASSPHRASE -in "$DB_BACKUP" \
-  | docker compose exec -T db sh -c 'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists --no-owner --no-privileges --exit-on-error -'
+  | docker compose exec -T db sh -c 'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists --no-owner --no-privileges --exit-on-error'
 docker compose exec -T db sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" --set app_user="$APP_DB_USER"' <<'SQL'
 SELECT format('ALTER TABLE %I.%I OWNER TO %I', schemaname, tablename, :'app_user')
 FROM pg_tables WHERE schemaname = 'public' \gexec

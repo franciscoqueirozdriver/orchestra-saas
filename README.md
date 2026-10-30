@@ -21,7 +21,7 @@ Esta entrega ainda **não** implementa cobrança/assinaturas SaaS, autoinscriç�
 
 O histórico recente é persistido; há suporte interno a itens de memória e checkpoints, mas ainda falta interface/workflow completo para curadoria de memória individual e aprovação de conhecimento. O RAG usa vetores com 1536 dimensões: configure um endpoint/modelo de embeddings compatível com essa dimensão; a API de chat e a de embeddings podem ser diferentes.
 
-O processo foi executado em sandbox sem Docker instalado e sem conta/credenciais da Hostinger, Z-API ou provedores de IA. Portanto, **Docker Compose, migração em PostgreSQL real, TLS, conexão Z-API, webhooks reais, envio/recebimento, backup/restauração e implantação no VPS não foram homologados nesta entrega**. Os testes não equivalem aos critérios de aceite da integração real.
+A preparação de infraestrutura foi validada localmente com build Docker, testes em Python 3.12 e inicialização de PostgreSQL/pgvector, Redis, API e worker, além de backup criptografado e restauração em stack isolada. TLS público, conexão Z-API, webhooks reais, envio/recebimento e implantação na VPS ainda precisam de homologação com domínio e credenciais reais. Os testes locais não equivalem aos critérios de aceite da integração real.
 
 ## Arquitetura e documentação
 
@@ -29,6 +29,7 @@ A proposta técnica com comparação de projetos open source, decisões, estrutu
 
 ## Stack
 
+- **Dependências:** versões de produção fixadas em `backend/requirements.lock`; atualizações devem regenerar esse arquivo e passar pela validação.
 - **API/runtime:** Python 3.12, FastAPI, SQLAlchemy 2, Alembic e Pydantic Settings.
 - **Segurança:** Argon2 para senhas, JWT curto, Fernet para credenciais, segredo hash de callback, limite de login no Redis e validação SSRF para destinos de IA/embeddings.
 - **Dados/filas:** PostgreSQL 16 + pgvector, Redis 7 e Celery; LangGraph com checkpoint PostgreSQL no fluxo de resposta.
@@ -50,6 +51,6 @@ A suíte atual verifica senha/JWT/cifra, autorização de tenant, parser de call
 
 ## Implantação
 
-Siga [`docs/deploy-hostinger.md`](docs/deploy-hostinger.md). Em resumo: aponte DNS para a VPS, abra apenas SSH/80/443, instale Docker Engine e Compose v2 no servidor, transfira o diretório, execute `./scripts/init-env.sh`, depois `docker compose config` e `docker compose up -d --build`. Caddy solicita certificados ao ACME automaticamente quando o DNS e as portas estão corretos. Crie o administrador inicial com `docker compose exec api python -m app.bootstrap`.
+Siga [`docs/deploy-hostinger.md`](docs/deploy-hostinger.md). Em resumo: aponte DNS para a VPS, abra apenas SSH/80/443, instale Docker Engine e Compose v2 no servidor, clone o repositório, execute `./scripts/init-env.sh` e `./scripts/deploy.sh`. Caddy solicita certificados ao ACME automaticamente quando o DNS e as portas estão corretos. Crie o administrador inicial com `docker compose exec api python -m app.bootstrap`.
 
 **Não execute `docker compose down -v` em produção**: isso apaga os volumes. Não publique `.env` nem os backups. Preserve uma cópia off-site da chave Fernet e da passphrase dos backups, separada da VPS. Leia o guia antes do primeiro deploy.

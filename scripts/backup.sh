@@ -24,7 +24,8 @@ test -s "$DATA_TMP"
 mv "$DB_TMP" "$BACKUP_DIR/orquestra-db-${STAMP}.dump.enc"
 mv "$DATA_TMP" "$BACKUP_DIR/orquestra-data-${STAMP}.tar.gz.enc"
 sha256sum "$BACKUP_DIR/orquestra-db-${STAMP}.dump.enc" "$BACKUP_DIR/orquestra-data-${STAMP}.tar.gz.enc" > "$BACKUP_DIR/orquestra-${STAMP}.sha256"
-chmod 600 "$BACKUP_DIR"/orquestra-"$STAMP".*
+chmod 600 "$BACKUP_DIR/orquestra-db-${STAMP}.dump.enc" \
+  "$BACKUP_DIR/orquestra-data-${STAMP}.tar.gz.enc" "$BACKUP_DIR/orquestra-${STAMP}.sha256"
 find "$BACKUP_DIR" -type f -mtime "+${KEEP_DAYS}" -delete
 echo "Backup criptografado criado em $BACKUP_DIR (UTC $STAMP)."
 echo "Copie arquivos e checksums para armazenamento externo; guarde a passphrase fora desta VPS."
