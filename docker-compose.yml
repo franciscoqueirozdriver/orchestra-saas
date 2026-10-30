@@ -1,0 +1,136 @@
+name: orquestra
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-orquestra}
+      POSTGRES_USER: ${POSTGRES_USER:-orquestra_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD em .env}
+      APP_DB_USER: ${APP_DB_USER:-orquestra_app}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Defina APP_DB_PASSWORD em .env}
+    command: >-
+      postgres -c shared_buffers=256MB -c max_connections=50
+      -c work_mem=4MB -c maintenance_work_mem=128MB
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init/01-app-user.sh:/docker-entrypoint-initdb.d/01-app-user.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    mem_limit: 2g
+    logging: &default-logging
+      driver: local
+      options:
+        max-size: "20m"
+        max-file: "5"
+    networks: [private]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    mem_limit: 384m
+    logging: *default-logging
+    networks: [private]
+
+  api:
+    build: .
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://${APP_DB_USER:-orquestra_app}:${APP_DB_PASSWORD}@db:5432/${POSTGRES_DB:-orquestra}
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:?Defina JWT_SECRET em .env}
+      CREDENTIALS_ENCRYPTION_KEY: ${CREDENTIALS_ENCRYPTION_KEY:?Defina CREDENTIALS_ENCRYPTION_KEY em .env}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?Defina PUBLIC_BASE_URL em .env}
+      ZAPI_API_BASE_URL: ${ZAPI_API_BASE_URL:-https://api.z-api.io}
+      ACCESS_TOKEN_MINUTES: ${ACCESS_TOKEN_MINUTES:-30}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      UPLOAD_MAX_MB: ${UPLOAD_MAX_MB:-20}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1536}
+      MEDIA_DIR: /app/data/media
+      MESSAGE_GROUP_WINDOW_SECONDS: ${MESSAGE_GROUP_WINDOW_SECONDS:-3}
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--no-access-log", "--proxy-headers", "--forwarded-allow-ips", "*"]
+    volumes:
+      - app_data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    mem_limit: 1200m
+    logging: *default-logging
+    networks: [private]
+
+  worker:
+    build: .
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://${APP_DB_USER:-orquestra_app}:${APP_DB_PASSWORD}@db:5432/${POSTGRES_DB:-orquestra}
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:?Defina JWT_SECRET em .env}
+      CREDENTIALS_ENCRYPTION_KEY: ${CREDENTIALS_ENCRYPTION_KEY:?Defina CREDENTIALS_ENCRYPTION_KEY em .env}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?Defina PUBLIC_BASE_URL em .env}
+      ZAPI_API_BASE_URL: ${ZAPI_API_BASE_URL:-https://api.z-api.io}
+      ACCESS_TOKEN_MINUTES: ${ACCESS_TOKEN_MINUTES:-30}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      UPLOAD_MAX_MB: ${UPLOAD_MAX_MB:-20}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1536}
+      MEDIA_DIR: /app/data/media
+      MESSAGE_GROUP_WINDOW_SECONDS: ${MESSAGE_GROUP_WINDOW_SECONDS:-3}
+    command: ["celery", "-A", "app.tasks.celery_app", "worker", "--loglevel=INFO", "--concurrency=2", "--prefetch-multiplier=1"]
+    volumes:
+      - app_data:/app/data
+    depends_on:
+      api:
+        condition: service_healthy
+    mem_limit: 1500m
+    logging: *default-logging
+    networks: [private]
+
+  web:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?Defina PUBLIC_DOMAIN em .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./frontend:/srv:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    mem_limit: 160m
+    logging: *default-logging
+    networks: [private]
+
+volumes:
+  postgres_data:
+  redis_data:
+  app_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  private:
+    driver: bridge
