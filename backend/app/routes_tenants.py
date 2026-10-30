@@ -22,10 +22,10 @@ def create_tenant(payload: TenantCreate, db: DbSession, _admin: User = Depends(r
         raise HTTPException(status_code=409, detail="Já existe um usuário com esse e-mail")
     tenant = Tenant(name=payload.name.strip(), slug=payload.slug)
     db.add(tenant)
-    db.flush()
-    owner = User(tenant_id=tenant.id, email=email, password_hash=hash_password(payload.owner_password), full_name=payload.owner_name.strip(), role="tenant_admin")
-    db.add(owner)
     try:
+        db.flush()
+        owner = User(tenant_id=tenant.id, email=email, password_hash=hash_password(payload.owner_password), full_name=payload.owner_name.strip(), role="tenant_admin")
+        db.add(owner)
         db.commit()
     except IntegrityError as exc:
         db.rollback()
