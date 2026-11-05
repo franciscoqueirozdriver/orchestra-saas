@@ -19,4 +19,37 @@ jobs:
       - name: Validate Compose
         run: docker compose --env-file .env.example config --quiet
       - name: Build production image
-        run: docker build -t orchestra-saas:ci .
+        run: docker build --build-arg "VCS_REF=$GITHUB_SHA" -t orchestra-saas:ci .
+
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: test_admin
+          POSTGRES_PASSWORD: test-only-ci
+          POSTGRES_DB: orchestra_consolidation_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test_admin -d orchestra_consolidation_test"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r backend/requirements-dev.txt
+      - name: Extract immutable original code for upgrade comparison
+        run: |
+          mkdir -p "$RUNNER_TEMP/orchestra-baseline"
+          git archive f6d0e2ac6e27c95b3bc8eda001d5fb8368a4afad backend | tar -x -C "$RUNNER_TEMP/orchestra-baseline"
+      - name: Fresh install, legacy upgrade, data preservation and refused downgrade
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://test_admin:test-only-ci@127.0.0.1:5432/orchestra_consolidation_test
+          ORCHESTRA_BASELINE_ROOT: ${{ runner.temp }}/orchestra-baseline
+          MEDIA_DIR: /tmp/orchestra-test-media
+        run: pytest -q tests/integration

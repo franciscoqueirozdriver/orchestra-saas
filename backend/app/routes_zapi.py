@@ -1,4 +1,5 @@
-from datetime import datetime, timezone
+from app.control import serialized_mutation
+from datetime import datetime, timezone, timedelta
 import logging
 import secrets
 
@@ -7,8 +8,8 @@ from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
 from app.dependencies import CurrentUser, DbSession, TenantId
-from app.models import Conversation, Message, OutboxMessage, User, ZapiInstance
-from app.schemas import SendTextRequest, ZapiInstanceCreate
+from app.models import Agent, Conversation, Message, OutboxMessage, User, ZapiInstance
+from app.schemas import SendTextRequest, ZapiInstanceCreate, InstancePolicyUpdate
 from app.security import callback_secret_matches, decrypt_secret, encrypt_secret, hash_callback_secret
 from app.zapi_client import ZapiClient, ZapiError
 from app.zapi_payload import classify, contact_key, contact_name, event_key
@@ -34,7 +35,7 @@ def _client(row: ZapiInstance) -> ZapiClient:
 
 
 def _instance_read(row: ZapiInstance) -> dict:
-    return {"id": row.id, "label": row.label, "instance_id": row.instance_id, "status": row.status, "webhook_configured": row.webhook_configured, "credentials_configured": True, "created_at": row.created_at.isoformat()}
+    return {"id": row.id, "label": row.label, "instance_id": row.instance_id, "status": row.status, "agent_id":row.agent_id, "global_sending_enabled":settings.outbound_enabled, "sending_enabled":row.sending_enabled, "messages_per_minute":row.messages_per_minute, "webhook_configured": row.webhook_configured, "credentials_configured": True, "created_at": row.created_at.isoformat()}
 
 
 @router.get("/zapi/instances")
@@ -44,6 +45,7 @@ def list_instances(db: DbSession, tenant_id: TenantId) -> list[dict]:
 
 
 @router.post("/zapi/instances", status_code=201)
+@serialized_mutation
 def create_instance(payload: ZapiInstanceCreate, request: Request, db: DbSession, tenant_id: TenantId, user: CurrentUser) -> dict:
     _require_admin(user)
     callback_token = secrets.token_urlsafe(36)
@@ -54,6 +56,7 @@ def create_instance(payload: ZapiInstanceCreate, request: Request, db: DbSession
         token_encrypted=encrypt_secret(payload.token) or "",
         client_token_encrypted=encrypt_secret(payload.client_token),
         callback_token_hash=hash_callback_secret(callback_token),
+        callback_token_encrypted=encrypt_secret(callback_token),
     )
     db.add(row)
     try:
@@ -71,7 +74,7 @@ def create_instance(payload: ZapiInstanceCreate, request: Request, db: DbSession
     callback_message = None
     if callback_url:
         try:
-            _client(row).set_received_webhook(callback_url)
+            _client(row).configure_webhooks(callback_url)
             webhook_configured = True
         except (ZapiError, ValueError):
             # Mostrar a URL uma única vez para configuração manual; segredos não são gravados nos logs.
@@ -84,6 +87,7 @@ def create_instance(payload: ZapiInstanceCreate, request: Request, db: DbSession
 
 
 @router.post("/zapi/instances/{internal_id}/refresh-status")
+@serialized_mutation
 def refresh_status(internal_id: str, db: DbSession, tenant_id: TenantId, user: CurrentUser) -> dict:
     row = _get_instance(db, tenant_id, internal_id)
     try:
@@ -94,10 +98,11 @@ def refresh_status(internal_id: str, db: DbSession, tenant_id: TenantId, user: C
         raise HTTPException(status_code=502, detail=f"Falha ao consultar Z-API (HTTP {exc.status_code or 'rede'})") from exc
     row.status = "connected" if response.get("connected") is True else "disconnected"
     db.commit()
-    return {"id": row.id, "status": row.status, "connected": response.get("connected") is True, "smartphone_connected": response.get("smartphoneConnected") is True}
+    return {"id": row.id, "status": row.status, "agent_id":row.agent_id, "global_sending_enabled":settings.outbound_enabled, "sending_enabled":row.sending_enabled, "messages_per_minute":row.messages_per_minute, "connected": response.get("connected") is True, "smartphone_connected": response.get("smartphoneConnected") is True}
 
 
 @router.post("/zapi/instances/{internal_id}/send-text", status_code=202)
+@serialized_mutation
 def send_text(internal_id: str, payload: SendTextRequest, db: DbSession, tenant_id: TenantId, user: CurrentUser) -> dict:
     row = _get_instance(db, tenant_id, internal_id)
     if user.role not in {"platform_admin", "tenant_admin", "operator"}:
@@ -114,27 +119,20 @@ def send_text(internal_id: str, payload: SendTextRequest, db: DbSession, tenant_
         conversation = Conversation(tenant_id=tenant_id, instance_id=row.id, contact_key=phone, contact_name="", status="open")
         db.add(conversation)
         db.flush()
-    outbox = OutboxMessage(tenant_id=tenant_id, instance_id=row.id, conversation_id=conversation.id, idempotency_key=secrets.token_urlsafe(24), destination=phone, content=payload.message, status="dispatching", attempts=1)
-    db.add(outbox)
-    db.commit()
-    db.refresh(outbox)
+    from app.policy import sending_denial
+    from app.outbox import enqueue
+    denial = sending_denial(row, conversation, allow_human=True)
+    if denial: raise HTTPException(409, detail=denial)
     try:
-        remote = _client(row).send_text(phone, payload.message)
-    except (ZapiError, ValueError) as exc:
-        outbox.status = "failed"
-        outbox.last_error = (str(exc) if isinstance(exc, ValueError) else f"Z-API HTTP {exc.status_code or 'rede'}")[:500]
-        db.commit()
-        raise HTTPException(status_code=502, detail="Falha ao enviar mensagem pela Z-API; consulte o estado da mensagem antes de repetir") from exc
-    external_id = str(remote.get("messageId") or remote.get("zaapId") or remote.get("id") or "")[:180] or None
-    outbox.status = "accepted"
-    outbox.external_message_id = external_id
-    db.add(Message(tenant_id=tenant_id, conversation_id=conversation.id, external_id=external_id, direction="outgoing", kind="text", content=payload.message, status="accepted"))
-    conversation.last_message_at = datetime.now(timezone.utc)
-    db.commit()
-    return {"outbox_id": outbox.id, "message_id": external_id, "status": "accepted_by_api_not_delivery_confirmed"}
+        conversation.status = "human"
+        outbox = enqueue(db, row, conversation, payload.message, idempotency_key=payload.idempotency_key)
+    except ValueError as exc: raise HTTPException(409, detail=str(exc)) from exc
+    return {"outbox_id":outbox.id,"status":outbox.status}
+
 
 
 @router.delete("/zapi/instances/{internal_id}", status_code=204)
+@serialized_mutation
 def deactivate_instance(internal_id: str, db: DbSession, tenant_id: TenantId, user: CurrentUser) -> None:
     _require_admin(user)
     row = _get_instance(db, tenant_id, internal_id)
@@ -145,10 +143,15 @@ def deactivate_instance(internal_id: str, db: DbSession, tenant_id: TenantId, us
 
 def _minimize_payload(payload: dict) -> dict:
     safe: dict = {}
-    for key in ("instanceId", "messageId", "zaapId", "id", "phone", "fromMe", "momment", "status", "type", "isGroup", "senderName", "chatName", "senderLid", "participantPhone", "participantLid"):
+    for key in ("instanceId", "messageId", "zaapId", "id", "phone", "fromMe", "momment", "status", "type", "isGroup", "senderName", "chatName", "senderLid", "participantPhone", "participantLid", "chatLid", "connected", "disconnected"):
+
         value = payload.get(key)
         if isinstance(value, (str, bool, int, float)) or value is None:
             safe[key] = value
+    if isinstance(payload.get("ids"), list):
+        safe["ids"] = [str(x)[:180] for x in payload["ids"][:1000] if isinstance(x, (str, int))]
+    if payload.get("error"):
+        safe["error"] = True  # Do not persist remote error text.
     kind, content = classify(payload)
     safe["normalizedKind"] = kind
     if kind == "text":
@@ -171,11 +174,19 @@ async def receive_zapi_webhook(instance_id: str, callback_token: str, request: R
     if not isinstance(payload, dict):
         raise HTTPException(status_code=422, detail="Payload deve ser um objeto JSON")
     row = db.query(ZapiInstance).filter(ZapiInstance.instance_id == instance_id, ZapiInstance.is_active.is_(True)).first()
-    if row is None or not callback_secret_matches(row.callback_token_hash, callback_token):
+    accepted = row is not None and callback_secret_matches(row.callback_token_hash, callback_token)
+    if row is not None and not accepted and row.callback_previous_hash and row.callback_previous_until:
+        accepted = row.callback_previous_until > datetime.now(timezone.utc) and callback_secret_matches(row.callback_previous_hash, callback_token)
+    if not accepted:
         raise HTTPException(status_code=404, detail="Webhook não encontrado")
     payload_instance = payload.get("instanceId")
     if payload_instance and str(payload_instance) != row.instance_id:
         raise HTTPException(status_code=400, detail="Identificador de instância não confere")
+    if payload.get('type') == 'MessageStatusCallback':
+        if not isinstance(payload.get('ids'), list) or not payload['ids'] or len(payload['ids']) > 1000 or any(not isinstance(i, (str, int)) or isinstance(i, bool) or len(str(i)) > 180 for i in payload['ids']):
+            raise HTTPException(422, detail='Callback de status requer ids válidos')
+        if payload.get('status') not in {'SENT', 'RECEIVED', 'READ', 'READ_BY_ME', 'PLAYED'}:
+            raise HTTPException(422, detail='Status de mensagem não reconhecido')
     key = event_key(payload)
     event_type = str(payload.get("type") or "unknown")[:80]
     from app.models import WebhookEvent
@@ -203,3 +214,47 @@ async def receive_zapi_webhook(instance_id: str, callback_token: str, request: R
         # O evento continua persistido no banco; o retorno não revela o payload nem segredos.
         logger.warning("Evento Z-API %s persistido, mas não despachado; verificar worker/broker", event.id)
     return {"accepted": True, "duplicate": False}
+
+
+@router.patch("/zapi/instances/{internal_id}/policy")
+@serialized_mutation
+def update_instance_policy(internal_id: str, payload: InstancePolicyUpdate, db: DbSession, tenant_id: TenantId, user: CurrentUser):
+    _require_admin(user)
+    row = _get_instance(db, tenant_id, internal_id)
+    changes = payload.model_dump(exclude_unset=True)
+    if any(value is None for key, value in changes.items() if key != 'agent_id'):
+        raise HTTPException(422, detail='Políticas não podem ser nulas')
+    agent_id = changes.get('agent_id')
+    if agent_id and not db.query(Agent).filter_by(id=agent_id, tenant_id=tenant_id).first():
+        raise HTTPException(422, detail='Agente não pertence à empresa')
+    for field, value in changes.items():
+        setattr(row, field, value)
+    db.commit()
+    return _instance_read(row)
+
+
+@router.post('/zapi/instances/{internal_id}/webhooks')
+@serialized_mutation
+def configure_instance_webhooks(internal_id: str, db: DbSession, tenant_id: TenantId, user: CurrentUser):
+    _require_admin(user)
+    row = _get_instance(db, tenant_id, internal_id)
+    if not settings.public_base_url:
+        raise HTTPException(409, detail='Defina a origem pública HTTPS')
+    token = decrypt_secret(row.callback_token_encrypted)
+    if not token:
+        token = secrets.token_urlsafe(36)
+        row.callback_previous_hash = row.callback_token_hash
+        row.callback_previous_until = datetime.now(timezone.utc) + timedelta(minutes=10)
+        row.callback_token_hash = hash_callback_secret(token)
+        row.callback_token_encrypted = encrypt_secret(token)
+        db.commit()
+    url = f'{settings.public_base_url}/api/webhooks/zapi/{row.instance_id}/{token}'
+    try:
+        _client(row).configure_webhooks(url)
+    except (ZapiError, ValueError):
+        row.webhook_configured = False
+        db.commit()
+        return {'configured': False, 'notice': 'Configuração não confirmada. Tente novamente; a mesma URL será reutilizada.'}
+    row.webhook_configured = True
+    db.commit()
+    return {'configured': True}

@@ -40,6 +40,8 @@ class AgentCreate(BaseModel):
     system_prompt: str = Field(default="", max_length=12000)
     enabled: bool = True
     auto_reply_enabled: bool = False
+    llm_config_id: str | None = None
+    fallback_config_ids: list[str] = Field(default_factory=list, max_length=8)
 
 
 class AgentUpdate(BaseModel):
@@ -48,6 +50,8 @@ class AgentUpdate(BaseModel):
     system_prompt: str | None = Field(default=None, max_length=12000)
     enabled: bool | None = None
     auto_reply_enabled: bool | None = None
+    llm_config_id: str | None = None
+    fallback_config_ids: list[str] | None = Field(default=None, max_length=8)
 
 
 class ZapiInstanceCreate(BaseModel):
@@ -58,7 +62,11 @@ class ZapiInstanceCreate(BaseModel):
 
 
 class LLMConfigUpsert(BaseModel):
-    provider: str = Field(pattern=r"^(openai-compatible|groq|xai)$")
+    provider: str = Field(min_length=1, max_length=40, pattern=r"^[a-zA-Z0-9_.-]+$")
+    name: str = Field(default="Principal", min_length=1, max_length=120)
+    protocol: str = Field(default="auto", pattern=r"^(auto|chat-completions|responses|anthropic|gemini)$")
+    enabled: bool = True
+    max_output_tokens: int = Field(default=2048, ge=128, le=32768)
     base_url: str = Field(min_length=8, max_length=500)
     model: str = Field(min_length=1, max_length=160)
     embedding_model: str = Field(default="text-embedding-3-small", min_length=1, max_length=160)
@@ -82,6 +90,7 @@ class LLMConfigUpsert(BaseModel):
 class SendTextRequest(BaseModel):
     phone: str = Field(min_length=5, max_length=80)
     message: str = Field(min_length=1, max_length=4000)
+    idempotency_key: str | None = Field(default=None, min_length=16, max_length=80)
 
 
 class MemoryCreate(BaseModel):
@@ -97,3 +106,15 @@ class AgentRead(BaseModel):
     system_prompt: str
     enabled: bool
     auto_reply_enabled: bool
+
+
+class InstancePolicyUpdate(BaseModel):
+    agent_id: str | None = None
+    sending_enabled: bool | None = None
+    messages_per_minute: int | None = Field(default=None, ge=1, le=60)
+
+
+class ConversationPolicyUpdate(BaseModel):
+    status: str = Field(pattern=r"^(open|human|paused)$")
+    consent_status: str = Field(pattern=r"^(unknown|granted|denied)$")
+    consent_evidence: str = Field(default="", max_length=1000)

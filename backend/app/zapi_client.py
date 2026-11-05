@@ -1,4 +1,8 @@
 from urllib.parse import quote
+import logging
+
+# httpx INFO includes request URLs; Z-API places credentials in its path.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 import httpx
 
@@ -59,3 +63,11 @@ class ZapiClient:
         if not callback_url.startswith("https://"):
             raise ValueError("A Z-API aceita somente webhook HTTPS")
         return self._request("PUT", "update-webhook-received", json={"value": callback_url})
+
+
+    def configure_webhooks(self, callback_url: str) -> dict:
+        from urllib.parse import urlparse
+        parsed = urlparse(callback_url)
+        if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError('Webhook deve usar HTTPS sem credenciais embutidas')
+        return self._request('PUT', 'update-every-webhooks', json={'value': callback_url})

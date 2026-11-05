@@ -1,0 +1,93 @@
+{
+  "status": "REFERENCIA_NAO_EXECUTAR",
+  "source_repository": "igreja-a-mesa-repo",
+  "baseline_orquestra": "f6d0e2a",
+  "files": [
+    {
+      "source": "supabase/functions/_shared/humanize.ts",
+      "revision": "dd197536ff3e527e11a5ffecc58cbcb572faa635",
+      "snapshot": "referencias-a-mesa/humanize.ts",
+      "sha256": "61d700499218976a552e2468756c3c2bb646579f2fe48a17c4b76223a9c20634"
+    },
+    {
+      "source": "supabase/functions/_shared/chunkRespostaWhatsApp.ts",
+      "revision": "dd197536ff3e527e11a5ffecc58cbcb572faa635",
+      "snapshot": "referencias-a-mesa/chunkRespostaWhatsApp.ts",
+      "sha256": "c22144d075249fc66bed1cb66df239a9d51746db47accbe55501e6836257d0bf"
+    },
+    {
+      "source": "supabase/functions/_shared/outputGuard.ts",
+      "revision": "dd197536ff3e527e11a5ffecc58cbcb572faa635",
+      "snapshot": "referencias-a-mesa/outputGuard.ts",
+      "sha256": "0c2f4e6b88ea60058a0babe2745ff6773c4abe7b9e92dac93bcddc0230fc6bab"
+    },
+    {
+      "source": "supabase/functions/_shared/mensagemDebounce.ts",
+      "revision": "dd197536ff3e527e11a5ffecc58cbcb572faa635",
+      "snapshot": "referencias-a-mesa/mensagemDebounce.ts",
+      "sha256": "6c6798e2e2afdf46fde6709c9ed9b639634b455be0026746c1691338fa67f22d"
+    },
+    {
+      "source": "supabase/functions/_shared/conversationEscape.ts",
+      "revision": "dd197536ff3e527e11a5ffecc58cbcb572faa635",
+      "snapshot": "referencias-a-mesa/conversationEscape.ts",
+      "sha256": "6cf3a4cb812768576186d4d74b19f9f8fbc8af9206057c619eee4dc176786bc9"
+    },
+    {
+      "source": "supabase/functions/_shared/mudancaAssuntoConversa.ts",
+      "revision": "dd197536ff3e527e11a5ffecc58cbcb572faa635",
+      "snapshot": "referencias-a-mesa/mudancaAssuntoConversa.ts",
+      "sha256": "56740b8bba1944a02b0a2f9cc14c1503a322a75fcd2cefd4a90f2cd4ea8ea734"
+    },
+    {
+      "source": "supabase/functions/_shared/conversaIdleGate.ts",
+      "revision": "dd197536ff3e527e11a5ffecc58cbcb572faa635",
+      "snapshot": "referencias-a-mesa/conversaIdleGate.ts",
+      "sha256": "65cc62d73f7cdc0ec4e87bfbfc78d7b530872d76284d48096de2550e133ef375"
+    },
+    {
+      "source": "supabase/functions/_shared/humanTakeover.ts",
+      "revision": "dd197536ff3e527e11a5ffecc58cbcb572faa635",
+      "snapshot": "referencias-a-mesa/humanTakeover.ts",
+      "sha256": "5efd18a3aaec61d67e96925660a03510cf919dfec2dd2f51c7c7728655155946"
+    },
+    {
+      "source": "supabase/functions/_shared/consultaContextoGerencial.ts",
+      "revision": "dd197536ff3e527e11a5ffecc58cbcb572faa635",
+      "snapshot": "referencias-a-mesa/consultaContextoGerencial.ts",
+      "sha256": "414e1f6d6d3fd8574b25f7450bbaba16b8294cf8cd5e82136f77fc1af41a8904"
+    },
+    {
+      "source": "supabase/functions/_shared/chunkRespostaWhatsApp_test.ts",
+      "revision": "dd197536ff3e527e11a5ffecc58cbcb572faa635",
+      "snapshot": "referencias-a-mesa/chunkRespostaWhatsApp_test.ts",
+      "sha256": "5a52cbe32d8a01606696c87a0ac3f0a51f910a967e142145efa2412c4ff9523d"
+    },
+    {
+      "source": "supabase/functions/_shared/mensagemDebounce_test.ts",
+      "revision": "dd197536ff3e527e11a5ffecc58cbcb572faa635",
+      "snapshot": "referencias-a-mesa/mensagemDebounce_test.ts",
+      "sha256": "450cb77f44f1b821539ff85f5f472c9783f9f095ffb7cff065193c9dffd53941",
+      "source_sha256": "6919aa759b7ec8dfda9bec13031ef00261669732c31d63e5f35e53abd9e26395",
+      "sanitization": "Telefone presente na fixture histórica substituído por contato-ficticio-teste; demais conteúdo preservado."
+    },
+    {
+      "source": "supabase/functions/_shared/mudancaAssuntoConversa_test.ts",
+      "revision": "dd197536ff3e527e11a5ffecc58cbcb572faa635",
+      "snapshot": "referencias-a-mesa/mudancaAssuntoConversa_test.ts",
+      "sha256": "f269a5457ef11d04d34f540f67f5deb71ae9f9295585a0f101bbe8a48b9bd9de"
+    },
+    {
+      "source": "supabase/migrations/0007_whatsapp_debounce_inbound.sql",
+      "revision": "dd197536ff3e527e11a5ffecc58cbcb572faa635",
+      "snapshot": "referencias-a-mesa/0007_whatsapp_debounce_inbound.sql",
+      "sha256": "e262a19eb78f7b0e790c2a642749620f18f952ef10b2188b7dc67bc204d46942"
+    },
+    {
+      "source": "supabase/migrations/0008_whatsapp_perguntas_nao_respondidas.sql",
+      "revision": "dd197536ff3e527e11a5ffecc58cbcb572faa635",
+      "snapshot": "referencias-a-mesa/0008_whatsapp_perguntas_nao_respondidas.sql",
+      "sha256": "bbb57900d6d672bc5409fe174427223f05540b507a7e39937fcfa72bfd8598d3"
+    }
+  ]
+}
