@@ -38,3 +38,11 @@ TODO.md
 **/*.key
 **/*.dump
 **/*.enc
+
+# Private local ingestion artifacts must never enter a build context.
+**/*.sqlite
+**/*.sqlite3
+**/*.sqlite-journal
+**/*.sqlite-wal
+**/*.sqlite-shm
+/private-knowledge/
