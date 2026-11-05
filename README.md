@@ -49,6 +49,10 @@ pytest -q
 
 A suíte atual verifica senha/JWT/cifra, autorização de tenant, parser de callbacks, endpoints/payloads Z-API com HTTP simulado, caminhos de texto dos provedores e janela de agrupamento. Nunca use credenciais reais em testes unitários.
 
+## Desenvolvimento e publicação
+
+Desenvolva localmente e compartilhe por branch/PR no GitHub. A VPS recebe somente commits revisados, com checkout limpo. Veja [fluxo local → GitHub → VPS](docs/fluxo-local-github-vps.md) e o [relatório de consolidação](docs/consolidacao/2026-11-05.md). A branch consolidada contém trabalho resgatado ainda em homologação; consulte seus bloqueios antes de promover a produção.
+
 ## Implantação
 
 Siga [`docs/deploy-hostinger.md`](docs/deploy-hostinger.md). Em resumo: aponte DNS para a VPS, abra apenas SSH/80/443, instale Docker Engine e Compose v2 no servidor, clone o repositório, execute `./scripts/init-env.sh` e `./scripts/deploy.sh`. Caddy solicita certificados ao ACME automaticamente quando o DNS e as portas estão corretos. Crie o administrador inicial com `docker compose exec api python -m app.bootstrap`.

@@ -2,6 +2,17 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# The local working copy and GitHub are the source; refuse drift before effects.
+git rev-parse --is-inside-work-tree >/dev/null
+checkout_status=$(git status --porcelain --untracked-files=all)
+if [[ -n "$checkout_status" ]]; then
+  echo "Publicação recusada: checkout com alterações pendentes." >&2
+  exit 1
+fi
+if [[ -n "${ORCHESTRA_EXPECTED_COMMIT:-}" ]] && [[ "$(git rev-parse HEAD)" != "$ORCHESTRA_EXPECTED_COMMIT" ]]; then
+  echo "HEAD difere do commit validado." >&2
+  exit 1
+fi
 command -v docker >/dev/null
 docker compose version >/dev/null
 [[ -f .env ]] || { echo "Execute ./scripts/init-env.sh primeiro." >&2; exit 1; }
