@@ -32,7 +32,7 @@ def classify(payload: dict[str, Any]) -> tuple[str, str]:
 
 
 def from_me(payload: dict[str, Any]) -> bool:
-    return bool(payload.get("fromMe", False))
+    return payload.get("fromMe") is True or str(payload.get("fromMe", "")).strip().lower() in {"true", "1"}
 
 
 def contact_key(payload: dict[str, Any]) -> str:

@@ -1,3 +1,4 @@
+from app.control import serialized_mutation
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import text
 from app.dependencies import CurrentUser, DbSession, TenantId
@@ -18,13 +19,16 @@ def _get(db,tenant_id,config_id):
     return row
 
 def _save(db,tenant_id,payload,row=None):
+    creating = row is None
     if row is None:
         if not payload.api_key: raise HTTPException(422,"Informe a chave para criar a conexão")
         # Serializes concurrent creation/default changes for this company.
         db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key,0))"),{"key":"llm:"+tenant_id})
         row=LLMConfig(tenant_id=tenant_id,is_default=not db.query(LLMConfig).filter(LLMConfig.tenant_id==tenant_id,LLMConfig.is_default.is_(True)).first(),api_key_encrypted=encrypt_secret(payload.api_key) or "")
         db.add(row)
-    for field in ["name","provider","protocol","base_url","model","enabled","max_output_tokens","embedding_model","embedding_base_url"]: setattr(row,field,getattr(payload,field))
+    for field in ["name","provider","protocol","base_url","model","enabled","max_output_tokens","embedding_model","embedding_base_url"]:
+        if creating or field in payload.model_fields_set:
+            setattr(row,field,getattr(payload,field))
     if payload.api_key: row.api_key_encrypted=encrypt_secret(payload.api_key) or row.api_key_encrypted
     if payload.embedding_api_key: row.embedding_api_key_encrypted=encrypt_secret(payload.embedding_api_key)
     row.cooldown_until=None;row.last_error_category=None
@@ -36,14 +40,17 @@ def list_connections(db:DbSession,tenant_id:TenantId):
     return [_read(x) for x in db.query(LLMConfig).filter(LLMConfig.tenant_id==tenant_id).order_by(LLMConfig.created_at).all()]
 
 @router.post("/connections",status_code=201)
+@serialized_mutation
 def create_connection(payload:LLMConfigUpsert,db:DbSession,tenant_id:TenantId,user:CurrentUser):
     _require_admin(user);return _save(db,tenant_id,payload)
 
 @router.put("/connections/{config_id}")
+@serialized_mutation
 def update_connection(config_id:str,payload:LLMConfigUpsert,db:DbSession,tenant_id:TenantId,user:CurrentUser):
     _require_admin(user);return _save(db,tenant_id,payload,_get(db,tenant_id,config_id))
 
 @router.post("/connections/{config_id}/default")
+@serialized_mutation
 def make_default(config_id:str,db:DbSession,tenant_id:TenantId,user:CurrentUser):
     _require_admin(user)
     db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key,0))"),{"key":"llm:"+tenant_id})
@@ -52,10 +59,12 @@ def make_default(config_id:str,db:DbSession,tenant_id:TenantId,user:CurrentUser)
     db.flush();row.is_default=True;db.commit();return _read(row)
 
 @router.post("/connections/{config_id}/resume")
+@serialized_mutation
 def resume_connection(config_id:str,db:DbSession,tenant_id:TenantId,user:CurrentUser):
     _require_admin(user);row=_get(db,tenant_id,config_id);row.cooldown_until=None;row.last_error_category=None;db.commit();return _read(row)
 
 @router.delete("/connections/{config_id}",status_code=204)
+@serialized_mutation
 def delete_connection(config_id:str,db:DbSession,tenant_id:TenantId,user:CurrentUser):
     _require_admin(user);row=_get(db,tenant_id,config_id)
     agents=db.query(Agent).filter(Agent.tenant_id==tenant_id).all()
@@ -69,6 +78,7 @@ def get_llm_config(db:DbSession,tenant_id:TenantId):
     return _read(row) if row else {"configured":False,"provider":"openai-compatible","model":"","base_url":"","embedding_model":"text-embedding-3-small","embedding_base_url":"","has_api_key":False,"has_embedding_api_key":False}
 
 @router.put("/config")
+@serialized_mutation
 def upsert_llm_config(payload:LLMConfigUpsert,db:DbSession,tenant_id:TenantId,user:CurrentUser):
     _require_admin(user)
     row=db.query(LLMConfig).filter(LLMConfig.tenant_id==tenant_id,LLMConfig.is_default.is_(True)).first()

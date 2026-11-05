@@ -1,3 +1,4 @@
+from app.control import serialized_mutation
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -38,6 +39,7 @@ def list_agents(db: DbSession, tenant_id: TenantId) -> list[dict]:
 
 
 @router.post("/agents", status_code=201)
+@serialized_mutation
 def create_agent(payload: AgentCreate, db: DbSession, tenant_id: TenantId, user: CurrentUser) -> dict:
     _require_admin(user)
     _validate_models(db, tenant_id, payload.llm_config_id, payload.fallback_config_ids)
@@ -53,6 +55,7 @@ def create_agent(payload: AgentCreate, db: DbSession, tenant_id: TenantId, user:
 
 
 @router.put("/agents/{agent_id}")
+@serialized_mutation
 def update_agent(agent_id: str, payload: AgentUpdate, db: DbSession, tenant_id: TenantId, user: CurrentUser) -> dict:
     _require_admin(user)
     row = db.query(Agent).filter(Agent.id == agent_id, Agent.tenant_id == tenant_id).first()
@@ -74,6 +77,7 @@ def update_agent(agent_id: str, payload: AgentUpdate, db: DbSession, tenant_id: 
 
 
 @router.delete("/agents/{agent_id}", status_code=204)
+@serialized_mutation
 def delete_agent(agent_id: str, db: DbSession, tenant_id: TenantId, user: CurrentUser) -> None:
     _require_admin(user)
     row = db.query(Agent).filter(Agent.id == agent_id, Agent.tenant_id == tenant_id).first()

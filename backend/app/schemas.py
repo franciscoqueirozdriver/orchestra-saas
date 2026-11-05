@@ -106,3 +106,15 @@ class AgentRead(BaseModel):
     system_prompt: str
     enabled: bool
     auto_reply_enabled: bool
+
+
+class InstancePolicyUpdate(BaseModel):
+    agent_id: str | None = None
+    sending_enabled: bool | None = None
+    messages_per_minute: int | None = Field(default=None, ge=1, le=60)
+
+
+class ConversationPolicyUpdate(BaseModel):
+    status: str = Field(pattern=r"^(open|human|paused)$")
+    consent_status: str = Field(pattern=r"^(unknown|granted|denied)$")
+    consent_evidence: str = Field(default="", max_length=1000)

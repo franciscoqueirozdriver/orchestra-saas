@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     environment: str = "development"
+    outbound_enabled: bool = False
+    model_history_limit: int = Field(default=14, ge=2, le=200)
     database_url: str = "postgresql+psycopg://orquestra:orquestra@localhost:5432/orquestra"
     redis_url: str = "redis://localhost:6379/0"
     jwt_secret: str = ""

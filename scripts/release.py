@@ -35,8 +35,10 @@ def validate_target(root, commit):
 
 def image_inventory(root):
     result = {}
-    for service in ('api', 'worker', 'web', 'db', 'redis'):
+    for service in ('api', 'worker', 'web', 'db', 'redis', 'scheduler'):
         container = run(root, 'docker', 'compose', 'ps', '-q', service)
+        if not container and service == 'scheduler':
+            continue
         if not container:
             raise RuntimeError('Serviço ausente: ' + service + '. Primeiro bootstrap exige procedimento próprio.')
         image = run(root, 'docker', 'inspect', '--format', '{{.Image}}', container)
@@ -48,6 +50,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('commit')
     parser.add_argument('--checkout-root', type=Path, help='Checkout alvo, para executar uma cópia revisada da ferramenta fora do repositório.')
+    parser.add_argument('--allow-outbound', action='store_true', help='Somente para piloto de envio explicitamente autorizado; respeita OUTBOUND_ENABLED configurado.')
     parser.add_argument('--apply', action='store_true', help='Autoriza publicação e execução do deploy, incluindo as migrations do commit.')
     parser.add_argument('--expected-db-revision', help='Obrigatório no apply; recusa revisão atual diferente da revisada.')
     parser.add_argument('--allow-schema-change', action='store_true', help='Confirma revisão do plano de migrations e rollback.')
@@ -90,7 +93,9 @@ def main():
     # maintenance window; Git cannot lock humans editing source outside this process.
     ensure_clean(root)
     subprocess.run(['git', 'checkout', '--detach', args.commit], cwd=root, check=True)
-    env = dict(os.environ, ORCHESTRA_EXPECTED_COMMIT=args.commit)
+    env = dict(os.environ, ORCHESTRA_EXPECTED_COMMIT=args.commit, ORCHESTRA_ALLOW_OUTBOUND_DEPLOY='yes' if args.allow_outbound else 'no')
+    if not args.allow_outbound:
+        env['OUTBOUND_ENABLED'] = 'false'
     try:
         subprocess.run(['bash', 'scripts/deploy.sh'], cwd=root, env=env, check=True)
         # Caddyfile is bind-mounted: recreate explicitly so new inode/config is used.
@@ -99,6 +104,7 @@ def main():
         receipt['status'] = 'failed_review_required'
         (release_dir / 'receipt.json').write_text(json.dumps(receipt, indent=2))
         raise
+    receipt['outbound_pilot_requested'] = args.allow_outbound
     receipt['status'] = 'started_external_checks_pending'
     (release_dir / 'receipt.json').write_text(json.dumps(receipt, indent=2))
     print('Recibo privado:', release_dir, '\nValide HTTPS, worker e sites adicionais. Não há rollback automático do banco.')

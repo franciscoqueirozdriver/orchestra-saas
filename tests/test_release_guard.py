@@ -76,3 +76,21 @@ def test_low_level_deploy_refuses_dirty_checkout_before_docker(tmp_path):
     assert result.returncode != 0
     assert 'alterações pendentes' in result.stderr
     assert not marker.exists()
+
+
+@pytest.mark.parametrize('allow,expected', [('no', 'false'), ('yes', 'true')])
+def test_deploy_pauses_outbound_unless_pilot_explicitly_allowed(tmp_path, allow, expected):
+    import os
+    repository(tmp_path)
+    scripts = tmp_path/'scripts';scripts.mkdir()
+    target = scripts/'deploy.sh'
+    target.write_text((Path(__file__).resolve().parents[1]/'scripts/deploy.sh').read_text())
+    git(tmp_path, 'add', 'scripts/deploy.sh');git(tmp_path, 'commit', '-qm', 'synthetic helper')
+    tools = tmp_path.parent/'pilot-tools';tools.mkdir(exist_ok=True)
+    executable = tools/'docker';executable.write_text('#!/bin/sh\nprintf "%s" "$OUTBOUND_ENABLED" > "$DOCKER_TEST_MARKER"\nexit 99\n');executable.chmod(0o700)
+    marker = tmp_path.parent/'outbound-state'
+    result = subprocess.run(['bash', str(target)], cwd=tmp_path, capture_output=True,
+                            env=dict(os.environ, PATH=str(tools)+':'+os.environ['PATH'], OUTBOUND_ENABLED='true',
+                                     ORCHESTRA_ALLOW_OUTBOUND_DEPLOY=allow, DOCKER_TEST_MARKER=str(marker)))
+    assert result.returncode != 0  # Fake Docker intentionally stops before all effects.
+    assert marker.read_text() == expected

@@ -18,13 +18,16 @@ def candidate_configs(db, agent):
     return [by_id[x] for x in ids if x in by_id and by_id[x].enabled]
 
 
-def generate_with_fallback(db, agent, conversation, instructions, history, *, client=complete):
+def generate_with_fallback(db, agent, conversation, instructions, history, *, client=complete, revision=None):
+    revision = conversation.revision if revision is None else revision
     serialized = json.dumps({"instructions":instructions,"history":history},ensure_ascii=False,sort_keys=True,separators=(",",":"))
     fingerprint = sha256(serialized.encode()).hexdigest()
-    run = db.query(ModelRun).filter(ModelRun.tenant_id==agent.tenant_id,ModelRun.conversation_id==conversation.id,ModelRun.revision==conversation.revision).order_by(ModelRun.created_at.desc()).first()
+    run = db.query(ModelRun).filter(ModelRun.tenant_id==agent.tenant_id,ModelRun.conversation_id==conversation.id,ModelRun.revision==revision).order_by(ModelRun.created_at.desc()).first()
     if run is None:
-        run = ModelRun(tenant_id=agent.tenant_id,conversation_id=conversation.id,agent_id=agent.id,revision=conversation.revision,context_hash=fingerprint,context_snapshot_encrypted=encrypt_secret(serialized),attempts=[],status="running")
+        run = ModelRun(tenant_id=agent.tenant_id,conversation_id=conversation.id,agent_id=agent.id,revision=revision,context_hash=fingerprint,context_snapshot_encrypted=encrypt_secret(serialized),attempts=[],status="running")
         db.add(run); db.commit()
+    if run.agent_id != agent.id or run.context_hash != fingerprint:
+        raise LLMError("Contexto ou agente mudou; aguarde nova revisão", category="stale_context")
     snapshot = json.loads(decrypt_secret(run.context_snapshot_encrypted))
     if run.status=="succeeded" and run.response_encrypted:
         return decrypt_secret(run.response_encrypted)

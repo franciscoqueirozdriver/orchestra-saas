@@ -10,7 +10,7 @@ def is_opt_out(text: str) -> bool:
     normalized = " ".join(normalized.split())
     return normalized in {"sair", "parar", "stop", "cancelar mensagens", "nao quero receber mensagens", "pare de me enviar mensagens", "nao me envie mais mensagens", "remover meu numero", "descadastrar"}
 
-def sending_denial(instance, conversation, now: datetime | None = None) -> str | None:
+def sending_denial(instance, conversation, now: datetime | None = None, *, allow_human=False) -> str | None:
     now = now or datetime.now(timezone.utc)
     if not instance or not instance.is_active or not instance.sending_enabled:
         return "instance_paused"
@@ -18,7 +18,7 @@ def sending_denial(instance, conversation, now: datetime | None = None) -> str |
         return "instance_disconnected"
     if not conversation or conversation.opted_out or conversation.consent_status == "denied":
         return "contact_blocked"
-    if conversation.status != "open":
+    if conversation.status != "open" and not (allow_human and conversation.status == "human"):
         return "conversation_paused"
     if conversation.consent_status == "granted":
         return None

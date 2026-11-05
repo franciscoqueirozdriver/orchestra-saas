@@ -65,6 +65,9 @@ class ZapiInstance(Base):
     token_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
     client_token_encrypted: Mapped[str | None] = mapped_column(Text)
     callback_token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    callback_token_encrypted: Mapped[str | None] = mapped_column(Text)
+    callback_previous_hash: Mapped[str | None] = mapped_column(String(64))
+    callback_previous_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_checked")
     webhook_configured: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -201,6 +204,7 @@ class OutboxMessage(Base):
 
 class ModelRun(Base):
     __tablename__ = "model_runs"
+    __table_args__ = (UniqueConstraint("tenant_id", "conversation_id", "revision", name="uq_model_run_revision"),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     conversation_id: Mapped[str | None] = mapped_column(ForeignKey("conversations.id", ondelete="CASCADE"), index=True)

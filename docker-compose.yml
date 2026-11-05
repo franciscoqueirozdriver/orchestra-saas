@@ -45,6 +45,7 @@ services:
 
   api:
     build: .
+    image: ${ORCHESTRA_IMAGE:-orquestra-app}:${ORCHESTRA_IMAGE_TAG:-local}
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+psycopg://${APP_DB_USER:-orquestra_app}:${APP_DB_PASSWORD}@db:5432/${POSTGRES_DB:-orquestra}
@@ -54,6 +55,7 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?Defina PUBLIC_BASE_URL em .env}
       ZAPI_API_BASE_URL: ${ZAPI_API_BASE_URL:-https://api.z-api.io}
       ACCESS_TOKEN_MINUTES: ${ACCESS_TOKEN_MINUTES:-30}
+      OUTBOUND_ENABLED: ${OUTBOUND_ENABLED:-false}
       ENVIRONMENT: ${ENVIRONMENT:-production}
       UPLOAD_MAX_MB: ${UPLOAD_MAX_MB:-20}
       EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1536}
@@ -78,9 +80,9 @@ services:
     networks: [private]
 
   worker:
-    build: .
+    image: ${ORCHESTRA_IMAGE:-orquestra-app}:${ORCHESTRA_IMAGE_TAG:-local}
     restart: unless-stopped
-    environment:
+    environment: &worker-runtime
       RUN_MIGRATIONS: "false"
       DATABASE_URL: postgresql+psycopg://${APP_DB_USER:-orquestra_app}:${APP_DB_PASSWORD}@db:5432/${POSTGRES_DB:-orquestra}
       REDIS_URL: redis://redis:6379/0
@@ -89,6 +91,7 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?Defina PUBLIC_BASE_URL em .env}
       ZAPI_API_BASE_URL: ${ZAPI_API_BASE_URL:-https://api.z-api.io}
       ACCESS_TOKEN_MINUTES: ${ACCESS_TOKEN_MINUTES:-30}
+      OUTBOUND_ENABLED: ${OUTBOUND_ENABLED:-false}
       ENVIRONMENT: ${ENVIRONMENT:-production}
       UPLOAD_MAX_MB: ${UPLOAD_MAX_MB:-20}
       EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1536}
@@ -101,6 +104,25 @@ services:
       api:
         condition: service_healthy
     mem_limit: 1500m
+    logging: *default-logging
+    networks: [private]
+
+  scheduler:
+    image: ${ORCHESTRA_IMAGE:-orquestra-app}:${ORCHESTRA_IMAGE_TAG:-local}
+    restart: unless-stopped
+    init: true
+    environment: *worker-runtime
+    command: ["python", "-m", "app.scheduler"]
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.scheduler", "--health"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 30s
+    mem_limit: 256m
     logging: *default-logging
     networks: [private]
 

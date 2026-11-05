@@ -23,10 +23,10 @@ class LLMError(RuntimeError):
 def _delay(value):
     try:
         seconds = float(value)
-        return max(0, math.ceil(seconds)) if math.isfinite(seconds) else 0
+        return min(3600, max(0, math.ceil(seconds))) if math.isfinite(seconds) else 0
     except (ValueError, TypeError, OverflowError):
         try:
-            return max(0, math.ceil((parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds()))
+            return min(3600, max(0, math.ceil((parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds())))
         except (ValueError, TypeError, OverflowError):
             return 0
 
@@ -61,6 +61,7 @@ def _post(url, api_key, payload, *, extra_headers=None):
     except UnsafeExternalURL as exc: raise LLMError("Destino de IA não permitido", category="unsafe_destination") from exc
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     headers.update(extra_headers or {})
+    headers = {k: v for k, v in headers.items() if v}
     try:
         response = httpx.post(url, headers=headers, json=payload, timeout=httpx.Timeout(settings.llm_request_timeout_seconds, connect=8), follow_redirects=False)
     except httpx.HTTPError as exc:
@@ -77,6 +78,22 @@ def resolved_protocol(provider, protocol="auto"):
     return {"xai":"responses", "openai":"responses", "anthropic":"anthropic", "claude":"anthropic", "gemini":"gemini", "google":"gemini"}.get(provider.lower(), "chat-completions")
 
 
+def _array(value):
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise LLMError("Resposta inválida do provedor")
+    return value
+
+
+def _object(value):
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise LLMError("Resposta inválida do provedor")
+    return value
+
+
 def complete(provider, base_url, model, api_key, system_prompt, history, *, protocol="auto", max_output_tokens=2048):
     protocol = resolved_protocol(provider, protocol)
     messages = [{"role": x["role"], "content": x["content"]} for x in history if x.get("role") in {"user","assistant"}]
@@ -84,33 +101,36 @@ def complete(provider, base_url, model, api_key, system_prompt, history, *, prot
     if protocol == "responses":
         data = _post(base + "/responses", api_key, {"model":model,"instructions":system_prompt,"input":messages,"max_output_tokens":max_output_tokens,"store":False})
         if data.get("error"):
-            code = str((data.get("error") or {}).get("code", ""))
+            error = data.get("error")
+            code = str(error.get("code", "")) if isinstance(error, dict) else ""
             raise LLMError("Falha na geração de IA", category="rate_limit" if code == "rate_limit_exceeded" else "invalid_response")
         if data.get("status") == "incomplete": raise LLMError("Resposta incompleta; limite de saída", category="output_limit")
-        blocks = [part for item in data.get("output",[]) if isinstance(item,dict) and item.get("type")=="message" for part in item.get("content",[]) if isinstance(part,dict)]
+        blocks = [part for item in _array(data.get("output")) if isinstance(item,dict) and item.get("type")=="message" for part in _array(item.get("content")) if isinstance(part,dict)]
         if any(x.get("type")=="refusal" for x in blocks): raise LLMError("Resposta recusada pelo provedor", category="safety")
         result = data.get("output_text") or "\n".join(x["text"] for x in blocks if x.get("type")=="output_text" and isinstance(x.get("text"),str))
     elif protocol == "anthropic":
         data = _post(base + "/messages",api_key,{"model":model,"system":system_prompt,"messages":messages,"max_tokens":max_output_tokens},extra_headers={"anthropic-version":"2026-10-21"})
         if data.get("stop_reason") in {"refusal"}: raise LLMError("Resposta recusada pelo provedor",category="safety")
         if data.get("stop_reason")=="max_tokens": raise LLMError("Resposta incompleta; limite de saída",category="output_limit")
-        result = "\n".join(x["text"] for x in data.get("content",[]) if isinstance(x,dict) and x.get("type")=="text" and isinstance(x.get("text"),str))
+        result = "\n".join(x["text"] for x in _array(data.get("content")) if isinstance(x,dict) and x.get("type")=="text" and isinstance(x.get("text"),str))
     elif protocol == "gemini":
         contents = [{"role":"model" if x["role"]=="assistant" else "user","parts":[{"text":x["content"]}]} for x in messages]
-        data = _post(base + "/models/" + quote(model,safe="") + ":generateContent",api_key,{"systemInstruction":{"parts":[{"text":system_prompt}]},"contents":contents,"generationConfig":{"maxOutputTokens":max_output_tokens}},extra_headers={"Authorization":"", "x-goog-api-key":api_key})
+        data = _post(base + "/models/" + quote(model,safe="") + ":generateContent",api_key,{"systemInstruction":{"parts":[{"text":system_prompt}]},"contents":contents,"generationConfig":{"maxOutputTokens":max_output_tokens}},extra_headers={"Authorization":None, "x-goog-api-key":api_key})
         candidates = data.get("candidates") or []
-        if data.get("promptFeedback",{}).get("blockReason") or any(x.get("finishReason") in {"SAFETY","PROHIBITED_CONTENT","BLOCKLIST","RECITATION"} for x in candidates): raise LLMError("Resposta bloqueada pelo provedor",category="safety")
+        if not isinstance(candidates, list) or any(not isinstance(x, dict) for x in candidates):
+            raise LLMError("Resposta inválida do provedor")
+        if _object(data.get("promptFeedback")).get("blockReason") or any(x.get("finishReason") in {"SAFETY","PROHIBITED_CONTENT","BLOCKLIST","RECITATION","SPII","IMAGE_SAFETY"} for x in candidates): raise LLMError("Resposta bloqueada pelo provedor",category="safety")
         candidate = candidates[0] if candidates else {}
         if candidate.get("finishReason")=="MAX_TOKENS": raise LLMError("Resposta incompleta; limite de saída",category="output_limit")
-        result = "\n".join(x["text"] for x in candidate.get("content",{}).get("parts",[]) if isinstance(x.get("text"),str) and not x.get("thought"))
+        result = "\n".join(x["text"] for x in _array(_object(candidate.get("content")).get("parts")) if isinstance(x,dict) if isinstance(x.get("text"),str) and not x.get("thought"))
     elif protocol == "chat-completions":
-        data = _post(base + "/chat/completions",api_key,{"model":model,"messages":[{"role":"system","content":system_prompt}]+messages})
+        data = _post(base + "/chat/completions",api_key,{"model":model,"messages":[{"role":"system","content":system_prompt}]+messages,"max_tokens":max_output_tokens})
         try:
             choice = data["choices"][0]
             if choice.get("finish_reason")=="content_filter" or choice.get("message",{}).get("refusal"): raise LLMError("Resposta recusada pelo provedor",category="safety")
             if choice.get("finish_reason")=="length": raise LLMError("Resposta incompleta; limite de saída",category="output_limit")
             result = choice["message"]["content"]
-        except (KeyError,IndexError,TypeError) as exc: raise LLMError("Resposta inválida do provedor") from exc
+        except (KeyError,IndexError,TypeError,AttributeError) as exc: raise LLMError("Resposta inválida do provedor") from exc
     else: raise LLMError("Protocolo não implementado",category="invalid_request")
     if not isinstance(result,str) or not result.strip(): raise LLMError("Provedor não retornou texto")
     return result.strip()
