@@ -12,6 +12,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.database import SessionLocal
 from app.embedding_client import embed_texts
+from app.embedding_config import embedding_request_config
 from app.llm_client import LLMError
 from app.locks import tenant_guard, advisory_guard
 from app.model_router import generate_with_fallback, candidate_configs
@@ -208,8 +209,8 @@ def _build_context(db, agent, conversation, configs, revision=None):
     if db.query(KnowledgeDocument).filter_by(tenant_id=agent.tenant_id).first():
         query = query_text
         if query:
-            key = decrypt_secret(llm.embedding_api_key_encrypted) or decrypt_secret(llm.api_key_encrypted)
-            vector = embed_texts(llm.embedding_base_url or llm.base_url, llm.embedding_model, key, [query])[0]
+            embedding_base,embedding_model,key=embedding_request_config(llm)
+            vector = embed_texts(embedding_base,embedding_model,key,[query])[0]
             rows = db.execute(select(KnowledgeChunk.content, KnowledgeDocument.filename).join(KnowledgeDocument, KnowledgeDocument.id == KnowledgeChunk.document_id)
                 .where(KnowledgeChunk.tenant_id == agent.tenant_id, KnowledgeDocument.tenant_id == agent.tenant_id, KnowledgeDocument.status == 'indexed',
                        KnowledgeChunk.embedding_model == llm.embedding_model).order_by(KnowledgeChunk.embedding.cosine_distance(vector)).limit(4)).all()

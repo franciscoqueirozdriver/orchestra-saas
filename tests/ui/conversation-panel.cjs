@@ -6,7 +6,7 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 const root = path.resolve(__dirname, '../../frontend');
 const server = http.createServer((req,res)=>{
-  const file = {'/':'index.html','/app.js':'app.js','/styles.css':'styles.css'}[req.url];
+  const file = {'/':'index.html','/app.js':'app.js','/styles.css':'styles.css','/llm-ui.js':'llm-ui.js'}[req.url];
   if(!file){res.writeHead(404);return res.end();}
   res.setHeader('Content-Type',file.endsWith('.js')?'application/javascript':file.endsWith('.css')?'text/css':'text/html');
   res.end(fs.readFileSync(path.join(root,file)));

@@ -1,6 +1,6 @@
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 
 def _validate_https_base(value: str) -> str:
@@ -10,6 +10,9 @@ def _validate_https_base(value: str) -> str:
         raise ValueError("Use uma URL base HTTPS sem usuário ou senha embutidos")
     if parsed.port not in (None, 443) or parsed.query or parsed.fragment:
         raise ValueError("Porta customizada, query ou fragmento não permitidos para a URL do provedor")
+    operation=parsed.path.rstrip('/').lower()
+    if any(operation.endswith(suffix) for suffix in ('/chat/completions','/responses','/messages','/embeddings',':generatecontent')):
+        raise ValueError('Informe a raiz da API, sem o caminho da operação')
     return value
 
 
@@ -85,6 +88,27 @@ class LLMConfigUpsert(BaseModel):
         if value is None or not value.strip():
             return None
         return _validate_https_base(value)
+
+    @field_validator('api_key','embedding_api_key')
+    @classmethod
+    def normalize_key(cls,value):
+        return value.strip() or None if value is not None else None
+
+    @field_validator('model','embedding_model')
+    @classmethod
+    def normalize_model(cls,value):
+        value=value.strip()
+        if not value or any(ord(c)<32 for c in value):
+            raise ValueError('Informe um identificador de modelo válido')
+        return value
+
+    @model_validator(mode='after')
+    def normalize_native_model(self):
+        from app.llm_client import resolved_protocol
+        if resolved_protocol(self.provider,self.protocol)=='gemini' and self.model.startswith('models/'):
+            self.model=self.model[len('models/'):]
+            if not self.model:raise ValueError('Informe o identificador do modelo Gemini')
+        return self
 
 
 class SendTextRequest(BaseModel):

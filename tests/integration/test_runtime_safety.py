@@ -703,3 +703,96 @@ def test_core_recovery_marks_abandoned_part_unknown(runtime,monkeypatch):
         assert db.get(OutboxMessage,queued).status=='unknown'
         assert db.query(OutboxPart).filter_by(outbox_id=queued,ordinal=0).one().status=='unknown'
     assert runtime.outbox.dispatch(queued)=='ignored'
+
+
+def test_provider_connections_are_multiple_private_and_tenant_scoped(runtime):
+    from app.routes_llm import create_connection,list_connections,update_connection,delete_connection
+    from app.schemas import LLMConfigUpsert
+    from app.models import LLMConfig
+    from app.security import decrypt_secret
+    from fastapi import HTTPException
+    payload=LLMConfigUpsert(name='Gemini synthetic',provider='gemini',protocol='gemini',base_url='https://generativelanguage.googleapis.com/v1beta',model='synthetic',api_key='synthetic-private-key')
+    with runtime.db() as db:
+        created=create_connection(payload,db,'tenant-a',runtime.admin)
+        assert len(list_connections(db,'tenant-a'))==2
+        assert list_connections(db,'tenant-b')==[]
+        assert not created['is_default'] and created['resolved_protocol']=='gemini'
+        assert 'synthetic-private-key' not in str(created)
+        stored=db.get(LLMConfig,created['id']);assert decrypt_secret(stored.api_key_encrypted)=='synthetic-private-key'
+        updated=update_connection(created['id'],LLMConfigUpsert(name='Renamed',provider='gemini',protocol='gemini',base_url=payload.base_url,model='new-synthetic'),db,'tenant-a',runtime.admin)
+        assert updated['name']=='Renamed' and updated['has_api_key']
+        assert decrypt_secret(db.get(LLMConfig,created['id']).api_key_encrypted)=='synthetic-private-key'
+        with pytest.raises(HTTPException) as exc:update_connection(created['id'],payload,db,'tenant-b',runtime.admin)
+        assert exc.value.status_code==404
+        with pytest.raises(HTTPException) as exc:create_connection(payload,db,'tenant-a',SimpleNamespace(role='operator'))
+        assert exc.value.status_code==403
+        delete_connection(created['id'],db,'tenant-a',runtime.admin)
+        assert len(list_connections(db,'tenant-a'))==1
+
+
+def test_generation_provider_change_preserves_embedding_destination_and_old_key(runtime):
+    from app.routes_llm import update_connection
+    from app.schemas import LLMConfigUpsert
+    from app.models import LLMConfig,KnowledgeDocument
+    from app.security import decrypt_secret
+    with runtime.db() as db:
+        db.add(KnowledgeDocument(tenant_id='tenant-a',filename='synthetic.txt',status='indexed'));db.commit()
+        update_connection('model-a',LLMConfigUpsert(provider='gemini',protocol='gemini',base_url='https://generativelanguage.googleapis.com/v1beta',model='synthetic',api_key='synthetic-new-google-key'),db,'tenant-a',runtime.admin)
+        row=db.get(LLMConfig,'model-a')
+        assert row.embedding_base_url=='https://provider.invalid/v1'
+        assert row.embedding_model=='synthetic'
+        assert decrypt_secret(row.embedding_api_key_encrypted)=='test-only-model-key'
+        assert decrypt_secret(row.api_key_encrypted)=='synthetic-new-google-key'
+
+
+def test_connection_move_requires_new_key_and_never_changes_rejected_config(runtime):
+    from app.routes_llm import update_connection
+    from app.schemas import LLMConfigUpsert
+    from app.models import LLMConfig,KnowledgeDocument
+    from fastapi import HTTPException
+    with runtime.db() as db:
+        payload=LLMConfigUpsert(provider='custom',base_url='https://other.invalid/v1',model='synthetic')
+        with pytest.raises(HTTPException) as exc:update_connection('model-a',payload,db,'tenant-a',runtime.admin)
+        assert exc.value.status_code==422
+        assert db.get(LLMConfig,'model-a').base_url=='https://provider.invalid/v1'
+        db.add(KnowledgeDocument(tenant_id='tenant-a',filename='synthetic.txt',status='indexed'));db.commit()
+        payload=LLMConfigUpsert(provider='custom',base_url='https://provider.invalid/v1',model='synthetic',embedding_base_url='https://other.invalid/v1',embedding_api_key='synthetic-new-key')
+        with pytest.raises(HTTPException) as exc:update_connection('model-a',payload,db,'tenant-a',runtime.admin)
+        assert exc.value.status_code==409
+        db.expire_all();assert db.get(LLMConfig,'model-a').embedding_base_url is None
+
+
+def test_agent_models_keep_fallback_order_and_refuse_effective_default_duplicates(runtime):
+    from app.models import Agent,LLMConfig
+    from app.routes_agents import update_agent
+    from app.routes_llm import make_default,delete_connection
+    from app.schemas import AgentUpdate
+    from app.security import encrypt_secret
+    from app.model_router import candidate_configs
+    from fastapi import HTTPException
+    with runtime.db() as db:
+        for identifier in ['alternative-1','alternative-2']:
+            db.add(LLMConfig(id=identifier,tenant_id='tenant-a',provider='custom',base_url='https://synthetic.invalid/v1',model=identifier,api_key_encrypted=encrypt_secret('synthetic-key')))
+        db.commit()
+        update_agent('agent-a',AgentUpdate(llm_config_id='model-a',fallback_config_ids=['alternative-2','alternative-1']),db,'tenant-a',runtime.admin)
+        assert [c.id for c in candidate_configs(db,db.get(Agent,'agent-a'))]==['model-a','alternative-2','alternative-1']
+        with pytest.raises(HTTPException) as exc:delete_connection('alternative-1',db,'tenant-a',runtime.admin)
+        assert exc.value.status_code==409
+        with pytest.raises(HTTPException) as exc:update_agent('agent-a',AgentUpdate(llm_config_id=None,fallback_config_ids=['model-a']),db,'tenant-a',runtime.admin)
+        assert exc.value.status_code==422
+        update_agent('agent-a',AgentUpdate(llm_config_id=None,fallback_config_ids=['alternative-1']),db,'tenant-a',runtime.admin)
+        with pytest.raises(HTTPException) as exc:make_default('alternative-1',db,'tenant-a',runtime.admin)
+        assert exc.value.status_code==409
+
+
+def test_default_change_does_not_mix_indexed_embedding_spaces(runtime):
+    from app.models import KnowledgeDocument,LLMConfig
+    from app.routes_llm import create_connection,make_default
+    from app.schemas import LLMConfigUpsert
+    from fastapi import HTTPException
+    with runtime.db() as db:
+        db.add(KnowledgeDocument(tenant_id='tenant-a',filename='synthetic.txt',status='indexed'));db.commit()
+        other=create_connection(LLMConfigUpsert(name='Other',provider='custom',protocol='responses',base_url='https://other.invalid/v1',model='synthetic',api_key='synthetic-key'),db,'tenant-a',runtime.admin)
+        with pytest.raises(HTTPException) as exc:make_default(other['id'],db,'tenant-a',runtime.admin)
+        assert exc.value.status_code==409
+        assert db.get(LLMConfig,'model-a').is_default is True
