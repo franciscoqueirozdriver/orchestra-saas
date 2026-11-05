@@ -17,7 +17,7 @@
 
 ## Limites importantes desta versão
 
-Esta entrega ainda **não** implementa cobrança/assinaturas SaaS, autoinscrição, gestão completa de usuários por empresa, consentimento e lista de bloqueio, auditoria operacional, rate limit de mensagens WhatsApp, callbacks de entrega, transcrição/áudio, processamento real de imagens/vídeos/documentos recebidos, envio de mídia, Google Calendar, CRM/ERP, ferramentas com efeito externo, execução de Groq Tools, xAI Agent Tools ou servidores MCP, nem aprendizado contínuo validado. O código de xAI e Groq nesta versão é de **texto**; não presume compatibilidade com as APIs de ferramentas. Há somente um grafo de resposta inicial, não um sistema completo de múltiplos agentes especializados.
+Esta entrega ainda **não** implementa cobrança/assinaturas SaaS, autoinscrição, gestão completa de usuários por empresa, gestão completa de consentimento e listas de bloqueio (já há opt-out e política de envio), auditoria operacional, rate limit de mensagens WhatsApp, homologação real dos callbacks de entrega, transcrição/áudio, processamento real de imagens/vídeos/documentos recebidos, envio de mídia, Google Calendar, CRM/ERP, ferramentas com efeito externo, execução de Groq Tools, xAI Agent Tools ou servidores MCP, nem aprendizado contínuo validado. O código de xAI e Groq nesta versão é de **texto**; não presume compatibilidade com as APIs de ferramentas. Há somente um grafo de resposta inicial, não um sistema completo de múltiplos agentes especializados.
 
 O histórico recente é persistido; há suporte interno a itens de memória e checkpoints, mas ainda falta interface/workflow completo para curadoria de memória individual e aprovação de conhecimento. O RAG usa vetores com 1536 dimensões: configure um endpoint/modelo de embeddings compatível com essa dimensão; a API de chat e a de embeddings podem ser diferentes.
 
@@ -48,6 +48,15 @@ pytest -q
 ```
 
 A suíte atual verifica senha/JWT/cifra, autorização de tenant, parser de callbacks, endpoints/payloads Z-API com HTTP simulado, caminhos de texto dos provedores e janela de agrupamento. Nunca use credenciais reais em testes unitários.
+
+## Estado da revisão da PR #1
+
+A revisão implementa atribuição explícita por instância, outbox serializada, recuperação
+com scheduler separado e contratos de provedores/callbacks testados com transporte
+simulado. A primeira publicação inicia com envio global suspenso. Consulte
+[revisão e limites](docs/consolidacao/2026-11-05-revisao-pr1.md) antes de autorizar um
+piloto real. As conversas brutas locais seguem o [processo privado de conhecimento](docs/conhecimento/preparacao-privada.md)
+e não são importadas ou enviadas a IA automaticamente.
 
 ## Desenvolvimento e publicação
 

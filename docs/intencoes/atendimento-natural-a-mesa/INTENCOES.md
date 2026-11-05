@@ -142,3 +142,15 @@ Rollback inicial por tenant: desabilitar recursos novos, parar dispatcher novo e
 - [x] Cenários de aceitação e roteiro de rollout/rollback.
 - [ ] Implementação integrada, migrações Alembic e backfill executável.
 - [ ] Homologação de presença, áudio, ferramentas, entrega e naturalidade com usuários.
+
+
+## Compatibilidade após a revisão da PR #1 (05/11/2026)
+
+A cadeia executável da branch agora inclui 0002/0003 e 0004. Os drafts desta pasta
+continuam referências da baseline f6d0e2a, não scripts para aplicar. Antes da futura
+implementação C01–C16, reconciliar `zapi_instances.agent_id`, `sending_enabled`,
+`conversations.opted_out/consent_status/last_incoming_at`, `outbox_messages`,
+`llm_configs` múltiplas, `model_runs` e callback_token_encrypted. Não criar colunas
+paralelas para os mesmos conceitos. O scheduler e a serialização de envio já foram
+implementados na revisão; isso não conclui chunking, memória aprovada ou a integração
+Instagram. Consulte docs/consolidacao/2026-11-05-revisao-pr1.md.

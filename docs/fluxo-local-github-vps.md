@@ -141,3 +141,36 @@ helper de baixo nível; a rotina oficial é release.py.
 
 A execução concreta da reversão será revisada para o recibo/revisão/estado real no
 momento. Não há promessa de reversão de dados apenas com checkout do código.
+
+## Revisão da PR #1: primeira publicação com envio suspenso
+
+A versão revisada compartilha a mesma imagem entre API, worker e scheduler. O Beat
+é um serviço separado, com líder no PostgreSQL e heartbeat; não iniciar outro Beat
+manual. A revisão Alembic alvo passou a `0004_model_run_uniqueness`. Antes do apply,
+conferir schema real e a cadeia revisada; não reaplicar SQL histórico.
+
+Uma publicação normal força OUTBOUND_ENABLED=false nos novos contêineres, mesmo
+que o .env já tenha true. O recibo registra se foi solicitada exceção para piloto.
+Os serviços podem receber/persistir eventos, mas não gerar/enviar respostas nessa
+etapa. Isso não é uma autorização de envio nem importação de conhecimento.
+
+A primeira conferência deve validar, sem contato externo: login, empresas,
+atribuição explícita na tela Instâncias → Agente e envio, edição de agentes,
+conexões, scheduler saudável e a mesma imagem em API/worker/scheduler. Vincular um
+agente não ativa sua auto-resposta automaticamente. Pausas e limites continuam
+válidos. Não há backfill que escolha um agente para o cliente silenciosamente.
+
+Somente em um piloto posterior e aprovado, OUTBOUND_ENABLED=true e a opção
+`--allow-outbound` do helper poderão ser usadas juntos; ainda se aplicam agente,
+conexão, consentimento e políticas. Não executar esse piloto por consequência do
+merge. Homologar contratos reais dos provedores/callbacks com contas/números próprios.
+O botão de reconfiguração de callbacks muda configuração externa: usar só nessa
+homologação autorizada; preserva temporariamente o segredo anterior por 10 minutos.
+
+Na reversão para imagens antigas, parar primeiro o scheduler novo; o código antigo
+não conhece sua recuperação nem o schema novo. Backup é obrigatório, e downgrade
+continua condicionado à preservação de conexões/model_runs. Não fazer rollback
+cego com dois dispatchers concorrentes ou apagar filas/volumes.
+
+Material de `/docs/Conversas/` é privado local e nunca acompanha publicação.
+Siga `conhecimento/preparacao-privada.md`; inventário não faz importação ou embeddings.
