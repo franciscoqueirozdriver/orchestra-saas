@@ -16,7 +16,11 @@ def _require_admin(user: User) -> None:
 
 
 def _validate_models(db, tenant_id, primary, fallbacks):
-    identifiers = ([primary] if primary else []) + (fallbacks or [])
+    effective=primary
+    if not effective:
+        default=db.query(LLMConfig).filter_by(tenant_id=tenant_id,is_default=True).first()
+        effective=default.id if default else None
+    identifiers = ([effective] if effective else []) + (fallbacks or [])
     if len(identifiers) != len(set(identifiers)):
         raise HTTPException(422, "Não repita conexões na cadeia de modelos")
     if identifiers and db.query(LLMConfig).filter(LLMConfig.tenant_id == tenant_id, LLMConfig.id.in_(identifiers)).count() != len(identifiers):

@@ -2,8 +2,11 @@ from app.control import serialized_mutation
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import text
 from app.dependencies import CurrentUser, DbSession, TenantId
-from app.models import Agent, LLMConfig, ModelRun
+from app.models import Agent, LLMConfig, ModelRun, KnowledgeDocument
 from app.schemas import LLMConfigUpsert
+from app.provider_catalog import catalog
+from app.embedding_config import embedding_spec
+from app.llm_client import resolved_protocol
 from app.security import encrypt_secret
 router = APIRouter(prefix="/api/llm", tags=["provedores de IA"])
 
@@ -11,7 +14,7 @@ def _require_admin(user):
     if user.role not in {"platform_admin","tenant_admin"}: raise HTTPException(403,"Ação restrita a administradores")
 
 def _read(row):
-    return {"id":row.id,"configured":True,"name":row.name,"provider":row.provider,"protocol":row.protocol,"model":row.model,"base_url":row.base_url,"enabled":row.enabled,"is_default":row.is_default,"max_output_tokens":row.max_output_tokens,"embedding_model":row.embedding_model,"embedding_base_url":row.embedding_base_url or "","has_api_key":bool(row.api_key_encrypted),"has_embedding_api_key":bool(row.embedding_api_key_encrypted or row.api_key_encrypted),"cooldown_until":row.cooldown_until.isoformat() if row.cooldown_until else None,"last_error_category":row.last_error_category}
+    return {"resolved_protocol":resolved_protocol(row.provider,row.protocol),"embedding_configured":bool(embedding_spec(row) and (row.embedding_api_key_encrypted or row.api_key_encrypted)),"has_dedicated_embedding_key":bool(row.embedding_api_key_encrypted),"id":row.id,"configured":True,"name":row.name,"provider":row.provider,"protocol":row.protocol,"model":row.model,"base_url":row.base_url,"enabled":row.enabled,"is_default":row.is_default,"max_output_tokens":row.max_output_tokens,"embedding_model":row.embedding_model,"embedding_base_url":row.embedding_base_url or "","has_api_key":bool(row.api_key_encrypted),"has_embedding_api_key":bool(row.embedding_api_key_encrypted or row.api_key_encrypted),"cooldown_until":row.cooldown_until.isoformat() if row.cooldown_until else None,"last_error_category":row.last_error_category}
 
 def _get(db,tenant_id,config_id):
     row=db.query(LLMConfig).filter(LLMConfig.tenant_id==tenant_id,LLMConfig.id==config_id).first()
@@ -19,18 +22,45 @@ def _get(db,tenant_id,config_id):
     return row
 
 def _save(db,tenant_id,payload,row=None):
-    creating = row is None
-    if row is None:
-        if not payload.api_key: raise HTTPException(422,"Informe a chave para criar a conexão")
-        # Serializes concurrent creation/default changes for this company.
-        db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key,0))"),{"key":"llm:"+tenant_id})
-        row=LLMConfig(tenant_id=tenant_id,is_default=not db.query(LLMConfig).filter(LLMConfig.tenant_id==tenant_id,LLMConfig.is_default.is_(True)).first(),api_key_encrypted=encrypt_secret(payload.api_key) or "")
+    from types import SimpleNamespace
+    creating=row is None
+    fields=['name','provider','protocol','base_url','model','enabled','max_output_tokens','embedding_model','embedding_base_url']
+    changes={field:getattr(payload,field) for field in fields if creating or field in payload.model_fields_set}
+    frozen_key=None
+    if not creating:
+        if row.base_url!=payload.base_url and not payload.api_key:
+            raise HTTPException(422,'Ao alterar a URL da geração, informe a chave novamente')
+        old_spec=embedding_spec(row)
+        prospective=SimpleNamespace(**{field:changes.get(field,getattr(row,field)) for field in fields})
+        if 'embedding_base_url' in changes and changes['embedding_base_url']!=row.embedding_base_url:
+            requested=changes['embedding_base_url'] or prospective.base_url
+            if requested!=(old_spec[0] if old_spec else None) and not payload.embedding_api_key:
+                raise HTTPException(422,'Ao alterar a URL de embeddings, informe a chave de embeddings novamente')
+        generation_moves=row.base_url!=prospective.base_url
+        separate_key_rotates=payload.api_key and old_spec and old_spec[0]!=prospective.base_url
+        if old_spec and generation_moves and 'embedding_base_url' not in changes:
+            changes['embedding_base_url']=old_spec[0]
+            prospective.embedding_base_url=old_spec[0]
+        if old_spec and (generation_moves or separate_key_rotates) and not payload.embedding_api_key and not row.embedding_api_key_encrypted:
+            frozen_key=row.api_key_encrypted
+        if row.is_default and old_spec and old_spec!=embedding_spec(prospective) and db.query(KnowledgeDocument).filter_by(tenant_id=tenant_id,status='indexed').first():
+            raise HTTPException(409,'Há documentos indexados: preserve a URL/modelo de embeddings; sua alteração exige reindexação planejada')
+    else:
+        if not payload.api_key:raise HTTPException(422,'Informe a chave para criar a conexão')
+        prospective=payload
+    if payload.embedding_api_key and embedding_spec(prospective) is None:
+        raise HTTPException(422,'Informe uma URL separada para a chave de embeddings no protocolo nativo')
+    if resolved_protocol(prospective.provider,prospective.protocol)=='gemini' and changes.get('model','').startswith('models/'):
+        changes['model']=changes['model'][len('models/'):]
+        if not changes['model']:raise HTTPException(422,'Informe o identificador do modelo Gemini')
+    if creating:
+        db.execute(text('SELECT pg_advisory_xact_lock(hashtextextended(:key,0))'),{'key':'llm:'+tenant_id})
+        row=LLMConfig(tenant_id=tenant_id,is_default=not db.query(LLMConfig).filter_by(tenant_id=tenant_id,is_default=True).first(),api_key_encrypted=encrypt_secret(payload.api_key) or '')
         db.add(row)
-    for field in ["name","provider","protocol","base_url","model","enabled","max_output_tokens","embedding_model","embedding_base_url"]:
-        if creating or field in payload.model_fields_set:
-            setattr(row,field,getattr(payload,field))
-    if payload.api_key: row.api_key_encrypted=encrypt_secret(payload.api_key) or row.api_key_encrypted
-    if payload.embedding_api_key: row.embedding_api_key_encrypted=encrypt_secret(payload.embedding_api_key)
+    for field,value in changes.items():setattr(row,field,value)
+    if frozen_key:row.embedding_api_key_encrypted=frozen_key
+    if payload.api_key:row.api_key_encrypted=encrypt_secret(payload.api_key) or row.api_key_encrypted
+    if payload.embedding_api_key:row.embedding_api_key_encrypted=encrypt_secret(payload.embedding_api_key)
     row.cooldown_until=None;row.last_error_category=None
     db.commit();db.refresh(row)
     return _read(row)
@@ -55,6 +85,13 @@ def make_default(config_id:str,db:DbSession,tenant_id:TenantId,user:CurrentUser)
     _require_admin(user)
     db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key,0))"),{"key":"llm:"+tenant_id})
     row=_get(db,tenant_id,config_id)
+    if not row.enabled:raise HTTPException(409,'Habilite a conexão antes de defini-la como padrão')
+    previous=db.query(LLMConfig).filter_by(tenant_id=tenant_id,is_default=True).first()
+    if previous and previous.id!=row.id and embedding_spec(previous)!=embedding_spec(row) and db.query(KnowledgeDocument).filter_by(tenant_id=tenant_id,status='indexed').first():
+        raise HTTPException(409,'Há documentos indexados: mantenha a mesma configuração de embeddings antes de mudar o padrão')
+    for agent in db.query(Agent).filter_by(tenant_id=tenant_id,llm_config_id=None):
+        if row.id in (agent.fallback_config_ids or []):
+            raise HTTPException(409,'Remova esta conexão das alternativas dos agentes que usam o padrão antes de promovê-la')
     db.query(LLMConfig).filter(LLMConfig.tenant_id==tenant_id).update({LLMConfig.is_default:False},synchronize_session="fetch")
     db.flush();row.is_default=True;db.commit();return _read(row)
 
@@ -88,3 +125,8 @@ def upsert_llm_config(payload:LLMConfigUpsert,db:DbSession,tenant_id:TenantId,us
 def list_runs(db:DbSession,tenant_id:TenantId):
     rows=db.query(ModelRun).filter(ModelRun.tenant_id==tenant_id).order_by(ModelRun.created_at.desc()).limit(100).all()
     return [{"id":x.id,"conversation_id":x.conversation_id,"revision":x.revision,"context_hash":x.context_hash,"attempts":x.attempts,"status":x.status,"selected_config_id":x.selected_config_id,"created_at":x.created_at.isoformat()} for x in rows]
+
+
+@router.get('/provider-presets')
+def provider_presets(tenant_id:TenantId):
+    return catalog()

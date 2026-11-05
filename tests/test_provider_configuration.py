@@ -1,0 +1,58 @@
+from types import SimpleNamespace
+import httpx
+import pytest
+from pydantic import ValidationError
+from app.provider_catalog import catalog
+from app.schemas import LLMConfigUpsert
+from app.llm_client import complete,LLMError,resolved_protocol
+from app.embedding_config import embedding_spec,embedding_request_config
+from app.security import encrypt_secret
+
+
+def test_presets_include_mesa_providers_and_return_fresh_metadata():
+    data=catalog();ids={p['id'] for p in data['presets']}
+    assert {'gemini','groq','mistral','openrouter','openai','xai','anthropic','openai-compatible'}<=ids
+    protocols={p['id'] for p in data['protocols']}
+    for p in data['presets']:
+        assert p['protocol'] in protocols
+        if p['base_url']:LLMConfigUpsert(provider=p['id'],protocol=p['protocol'],base_url=p['base_url'],model='synthetic')
+    data['presets'][0]['base_url']='https://mutated.invalid'
+    assert catalog()['presets'][0]['base_url']!='https://mutated.invalid'
+    assert data['custom_providers'] is True and not data['live_provider_verified']
+
+
+@pytest.mark.parametrize('provider',['custom-acme','mistral','openrouter'])
+def test_new_provider_brands_need_no_schema_or_adapter_when_protocol_matches(monkeypatch,provider):
+    config=LLMConfigUpsert(provider=provider,protocol='chat-completions',base_url='https://synthetic.invalid/api/v1',model='vendor/new-model',api_key='synthetic-key')
+    calls=[]
+    monkeypatch.setattr('app.llm_client.validate_public_https',lambda _:None)
+    monkeypatch.setattr('app.llm_client.httpx.post',lambda url,**kwargs:calls.append((url,kwargs)) or httpx.Response(200,json={'choices':[{'message':{'content':'synthetic answer'},'finish_reason':'stop'}]}))
+    assert complete(config.provider,config.base_url,config.model,config.api_key,'synthetic',[],protocol=config.protocol)=='synthetic answer'
+    assert calls[0][0]=='https://synthetic.invalid/api/v1/chat/completions'
+    assert calls[0][1]['json']['model']=='vendor/new-model'
+
+
+def test_protocol_is_explicit_independent_of_provider_brand():
+    assert resolved_protocol('custom-relay','gemini')=='gemini'
+    with pytest.raises(ValidationError):LLMConfigUpsert(provider='custom',protocol='unimplemented-protocol',base_url='https://synthetic.invalid',model='synthetic')
+
+
+@pytest.mark.parametrize('suffix',['/chat/completions','/responses','/messages','/embeddings','/models/synthetic:generateContent'])
+def test_full_operation_url_is_not_accepted_as_api_root(suffix):
+    with pytest.raises(ValidationError):LLMConfigUpsert(provider='custom',base_url='https://synthetic.invalid/v1'+suffix,model='synthetic')
+
+
+def test_native_model_prefix_normalization_does_not_change_openrouter_ids():
+    native=LLMConfigUpsert(provider='gemini',base_url='https://synthetic.invalid/v1beta',model='models/synthetic',api_key='  synthetic-key  ')
+    assert native.model=='synthetic' and native.api_key=='synthetic-key'
+    compatible=LLMConfigUpsert(provider='openrouter',base_url='https://synthetic.invalid/v1',model='vendor/synthetic')
+    assert compatible.model=='vendor/synthetic'
+
+
+def test_native_generation_does_not_silently_inherit_an_embedding_endpoint():
+    row=SimpleNamespace(provider='gemini',protocol='gemini',base_url='https://synthetic.invalid/v1beta',embedding_base_url=None,embedding_model='synthetic',api_key_encrypted=encrypt_secret('generation-key'),embedding_api_key_encrypted=None)
+    assert embedding_spec(row) is None
+    with pytest.raises(LLMError) as exc:embedding_request_config(row)
+    assert exc.value.category=='configuration'
+    row.embedding_base_url='https://embedding.invalid/v1';row.embedding_api_key_encrypted=encrypt_secret('embedding-key')
+    assert embedding_request_config(row)==('https://embedding.invalid/v1','synthetic','embedding-key')

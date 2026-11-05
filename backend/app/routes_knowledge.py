@@ -12,9 +12,9 @@ from app.config import settings
 from app.database import get_db
 from app.dependencies import get_current_user, get_tenant_id
 from app.embedding_client import embed_texts
+from app.embedding_config import embedding_request_config
 from app.llm_client import LLMError
 from app.models import KnowledgeChunk, KnowledgeDocument, LLMConfig, User
-from app.security import decrypt_secret
 
 router = APIRouter(prefix="/api/knowledge/documents", tags=["conhecimento"])
 
@@ -105,14 +105,11 @@ async def upload_document(
     llm = db.query(LLMConfig).filter(LLMConfig.tenant_id == tenant_id, LLMConfig.is_default.is_(True)).first()
     if llm is None:
         raise HTTPException(status_code=409, detail="Configure um provedor de embeddings antes de indexar documentos")
-    embedding_key = decrypt_secret(llm.embedding_api_key_encrypted) or decrypt_secret(llm.api_key_encrypted)
-    embedding_base_url = llm.embedding_base_url or llm.base_url
-    if not embedding_key:
-        raise HTTPException(status_code=409, detail="Configure uma chave de embeddings")
     try:
-        vectors = embed_texts(embedding_base_url, llm.embedding_model, embedding_key, chunks)
+        embedding_base_url,embedding_model,embedding_key=embedding_request_config(llm)
+        vectors = embed_texts(embedding_base_url,embedding_model,embedding_key,chunks)
     except LLMError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(status_code=409 if exc.category=="configuration" else 502, detail=str(exc)) from exc
     doc = KnowledgeDocument(tenant_id=tenant_id, filename=filename, mime_type=mime_type, status="indexed")
     db.add(doc)
     db.flush()

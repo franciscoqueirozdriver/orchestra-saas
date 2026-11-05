@@ -4,3 +4,10 @@
 /* Conversation controls remain usable at narrow widths. */
 .message-head{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
 .message-head .actions{flex-wrap:wrap}
+
+.agent-models{margin:16px 0;padding:14px;border:1px solid var(--line);border-radius:8px}
+.agent-models legend{padding:0 5px;font-size:13px;font-weight:600}
+#model-fallback-order{padding-left:22px}
+#model-fallback-order li{padding:5px 0;overflow-wrap:anywhere}
+#llm-connection-form details{margin:16px 0}
+#llm-connection-form summary{cursor:pointer;font-weight:600}
