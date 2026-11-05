@@ -645,6 +645,7 @@ def test_core_schema_downgrade_refuses_new_data(runtime,monkeypatch):
     with runtime.db() as db:
         assert db.execute(text('SELECT version_num FROM alembic_version')).scalar()=='0005_conversation_core'
         assert db.query(ConversationTurn).count()==1
+    subprocess.run([sys.executable,"-m","alembic","upgrade","head"],cwd=ROOT/"backend",env=env,capture_output=True,check=True)
 
 
 def test_core_resume_keeps_recent_operator_words_without_restoring_old_filters(runtime,monkeypatch):
@@ -796,3 +797,96 @@ def test_default_change_does_not_mix_indexed_embedding_spaces(runtime):
         with pytest.raises(HTTPException) as exc:make_default(other['id'],db,'tenant-a',runtime.admin)
         assert exc.value.status_code==409
         assert db.get(LLMConfig,'model-a').is_default is True
+
+
+def test_document_storage_without_model_and_explicit_indexing(runtime, monkeypatch):
+    import asyncio
+    from io import BytesIO
+    from fastapi import UploadFile, HTTPException
+    from app import routes_knowledge as api
+    from app.models import LLMConfig, KnowledgeDocument, KnowledgeChunk
+    from app.schemas import KnowledgeSearchUpsert
+    from app.embedding_config import knowledge_embedding_config
+    with runtime.db() as db:
+        db.query(LLMConfig).delete();db.commit()
+        def deny(*args):raise AssertionError('Saving must not call provider')
+        monkeypatch.setattr(api,'embed_texts',deny)
+        saved=asyncio.run(api.upload_document(UploadFile(filename='synthetic.txt',file=BytesIO(b'Synthetic knowledge only')),db,'tenant-a',runtime.admin))
+        assert saved['status']=='pending_index'
+        assert db.get(KnowledgeDocument,saved['id']).extracted_text=='Synthetic knowledge only'
+        assert db.query(KnowledgeChunk).count()==0
+        assert api.get_search_settings(db,'tenant-a')['configured'] is False
+        with pytest.raises(HTTPException) as exc:api.index_document(saved['id'],db,'tenant-a',runtime.admin)
+        assert exc.value.status_code==409
+        assert db.get(KnowledgeDocument,saved['id']).status=='pending_index'
+        config=KnowledgeSearchUpsert(base_url='https://embeddings.invalid/v1',model='synthetic-1536',api_key='synthetic-private-key')
+        result=api.save_search_settings(config,db,'tenant-a',runtime.admin)
+        assert result['source']=='dedicated' and 'synthetic-private-key' not in str(result)
+        assert knowledge_embedding_config(db,'tenant-a')==('https://embeddings.invalid/v1','synthetic-1536','synthetic-private-key')
+        with pytest.raises(HTTPException) as exc:api.index_document(saved['id'],db,'tenant-b',runtime.admin)
+        assert exc.value.status_code==404
+        calls=[]
+        def embed(base,model,key,chunks):
+            calls.append(chunks);return [[0.0]*1536 for _ in chunks]
+        monkeypatch.setattr(api,'embed_texts',embed)
+        assert api.index_document(saved['id'],db,'tenant-a',runtime.admin)['status']=='indexed'
+        api.index_document(saved['id'],db,'tenant-a',runtime.admin)
+        assert len(calls)==1 and db.query(KnowledgeChunk).count()==1
+        with pytest.raises(HTTPException) as exc:
+            api.save_search_settings(KnowledgeSearchUpsert(base_url='https://different.invalid/v1',model='other',api_key='synthetic'),db,'tenant-a',runtime.admin)
+        assert exc.value.status_code==409
+        api.save_search_settings(KnowledgeSearchUpsert(base_url=config.base_url,model=config.model),db,'tenant-a',runtime.admin)
+        assert knowledge_embedding_config(db,'tenant-a')[2]=='synthetic-private-key'
+
+
+def test_document_index_failure_preserves_text_and_retries(runtime,monkeypatch):
+    import asyncio
+    from io import BytesIO
+    from fastapi import UploadFile, HTTPException
+    from app import routes_knowledge as api
+    from app.models import KnowledgeDocument, KnowledgeChunk
+    from app.llm_client import LLMError
+    with runtime.db() as db:
+        saved=asyncio.run(api.upload_document(UploadFile(filename='retry.txt',file=BytesIO(b'Synthetic retry')),db,'tenant-a',runtime.admin))
+        def fail(*args):raise LLMError('Synthetic unavailable',category='transient')
+        monkeypatch.setattr(api,'embed_texts',fail)
+        with pytest.raises(HTTPException):api.index_document(saved['id'],db,'tenant-a',runtime.admin)
+        assert db.get(KnowledgeDocument,saved['id']).extracted_text=='Synthetic retry'
+        assert db.get(KnowledgeDocument,saved['id']).status=='pending_index'
+        assert db.query(KnowledgeChunk).count()==0
+        monkeypatch.setattr(api,'embed_texts',lambda *args:[[0.0]*1536])
+        assert api.index_document(saved['id'],db,'tenant-a',runtime.admin)['status']=='indexed'
+        with pytest.raises(HTTPException) as exc:api.delete_document(saved['id'],db,'tenant-a',SimpleNamespace(role='operator'))
+        assert exc.value.status_code==403
+
+
+def test_document_index_concurrent_requests_do_not_duplicate(runtime,monkeypatch):
+    import asyncio
+    from io import BytesIO
+    from fastapi import UploadFile
+    from app import routes_knowledge as api
+    from app.models import KnowledgeChunk
+    calls=[]
+    monkeypatch.setattr(api,'embed_texts',lambda *args:(calls.append(1) or [[0.0]*1536]))
+    with runtime.db() as db:
+        saved=asyncio.run(api.upload_document(UploadFile(filename='concurrent.txt',file=BytesIO(b'Synthetic concurrency')),db,'tenant-a',runtime.admin))
+    barrier=threading.Barrier(2)
+    def index(_):
+        barrier.wait()
+        with runtime.db() as db:return api.index_document(saved['id'],db,'tenant-a',runtime.admin)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results=list(pool.map(index,range(2)))
+    assert all(x['status']=='indexed' for x in results) and len(calls)==1
+    with runtime.db() as db:assert db.query(KnowledgeChunk).count()==1
+
+
+def test_storage_downgrade_refuses_saved_text(runtime):
+    from app.models import KnowledgeDocument
+    with runtime.db() as db:
+        db.add(KnowledgeDocument(tenant_id='tenant-a',filename='synthetic.txt',status='pending_index',extracted_text='Synthetic retained text'));db.commit()
+    env=dict(os.environ,DATABASE_URL=URL,PYTHONPATH=str(ROOT/'backend'))
+    result=subprocess.run([sys.executable,'-m','alembic','downgrade','0005_conversation_core'],cwd=ROOT/'backend',env=env,capture_output=True,text=True)
+    assert result.returncode!=0 and 'Downgrade recusado' in result.stderr
+    with runtime.db() as db:
+        assert db.execute(text('SELECT version_num FROM alembic_version')).scalar()=='0006_knowledge_storage'
+        assert db.query(KnowledgeDocument).one().extracted_text=='Synthetic retained text'

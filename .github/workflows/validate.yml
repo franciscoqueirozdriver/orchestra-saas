@@ -67,3 +67,5 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/orchestra-ui/node_modules" node tests/ui/conversation-panel.cjs
       - name: Provider connections and agent routing with synthetic API
         run: NODE_PATH="$RUNNER_TEMP/orchestra-ui/node_modules" node tests/ui/provider-connections.cjs
+      - name: Knowledge storage and explicit indexing with synthetic API
+        run: NODE_PATH="$RUNNER_TEMP/orchestra-ui/node_modules" node tests/ui/knowledge-storage.cjs

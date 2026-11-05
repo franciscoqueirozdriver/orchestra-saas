@@ -173,3 +173,26 @@ class ConversationActionRequest(BaseModel):
 class ConversationSendRequest(ConversationActionRequest):
     message: str = Field(min_length=1,max_length=4000)
     idempotency_key: str = Field(min_length=16,max_length=80)
+
+
+class KnowledgeSearchUpsert(BaseModel):
+    base_url: str = Field(max_length=500)
+    model: str = Field(min_length=1,max_length=160)
+    api_key: str | None = Field(default=None,max_length=1000)
+
+    @field_validator('base_url')
+    @classmethod
+    def validate_base(cls,value):
+        return _validate_https_base(value)
+
+    @field_validator('model')
+    @classmethod
+    def validate_model(cls,value):
+        value=value.strip()
+        if not value or any(ord(c)<32 for c in value):raise ValueError('Informe o modelo de embeddings')
+        return value
+
+    @field_validator('api_key')
+    @classmethod
+    def validate_key(cls,value):
+        return value.strip() or None if value is not None else None

@@ -76,7 +76,7 @@ def test_frozen_initial_and_legacy_upgrade_preserve_schema_and_synthetic_data():
         alembic(ROOT, 'upgrade', 'head')
         upgraded = shape(engine)
         with engine.connect() as c:
-            assert c.scalar(text('SELECT version_num FROM alembic_version')) == '0005_conversation_core'
+            assert c.scalar(text('SELECT version_num FROM alembic_version')) == '0006_knowledge_storage'
             assert c.scalar(text("SELECT count(*) FROM messages WHERE content='synthetic only'")) == 1
             assert c.scalar(text("SELECT last_incoming_at IS NOT NULL FROM conversations WHERE id='conversation-a'"))
             assert c.scalar(text("SELECT is_default FROM llm_configs WHERE id='llm-a'"))
@@ -88,6 +88,7 @@ def test_frozen_initial_and_legacy_upgrade_preserve_schema_and_synthetic_data():
         failed = alembic(ROOT, 'downgrade', '0002_delivery_controls', success=False)
         assert 'Downgrade recusado' in failed.stderr
         with engine.begin() as c:
+            # Migrations commit individually: the empty 0006 may revert before 0004 refuses.
             assert c.scalar(text('SELECT version_num FROM alembic_version')) == '0005_conversation_core'
             assert c.scalar(text('SELECT count(*) FROM llm_configs')) == 2
             c.execute(text("DELETE FROM llm_configs WHERE id='llm-b'"))
