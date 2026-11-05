@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def engine():
     parsed = make_url(URL)
     assert parsed.database == 'orchestra_consolidation_test'
-    assert parsed.host in {'127.0.0.1', 'orchestra-consolidation-test-db-20261105'}
+    assert parsed.host in {'127.0.0.1', 'orchestra-consolidation-test-db-20261105', 'orchestra-natural-test-db-20261105'}
     engine = create_engine(URL, pool_size=12, max_overflow=8)
     with engine.begin() as c:
         c.execute(text('DROP SCHEMA public CASCADE'))
@@ -306,7 +306,10 @@ def test_opt_out_between_generation_and_dispatch_blocks_send(runtime):
     row_id = queue(runtime)
     e = event(runtime, 'synthetic-opt-out', payload={'phone': 'synthetic-contact', 'normalizedKind': 'text', 'normalizedText': 'Parar'})
     runtime.tasks.process_webhook_event.run(e)
-    assert runtime.outbox.dispatch(row_id) == 'contact_blocked'
+    assert runtime.outbox.dispatch(row_id) == 'ignored'
+    with runtime.db() as db:
+        from app.models import OutboxMessage
+        assert db.get(OutboxMessage,row_id).status=='cancelled'
 
 
 def test_callback_arriving_before_http_ack_is_recovered_after_correlation(runtime, monkeypatch):
@@ -424,3 +427,279 @@ def test_previous_callback_secret_expires_without_breaking_active_secret(runtime
     body = {'instanceId': 'external-a', 'type': 'ReceivedCallback', 'phone': 'synthetic-contact', 'messageId': 'synthetic-expiry', 'text': {'message': 'synthetic'}}
     assert api.post('/api/webhooks/zapi/external-a/test-only-callback-secret', json=body).status_code == 404
     assert api.post('/api/webhooks/zapi/external-a/synthetic-new-callback', json=body).status_code == 202
+
+
+# Conversational core: all payloads below are synthetic, all external effects mocked.
+def core(runtime, monkeypatch):
+    from app.models import Agent, User
+    from app.schemas import ConversationProfile
+    with runtime.db() as db:
+        db.get(Agent,'agent-a').conversation_profile=ConversationProfile(enabled=True,part_delay_seconds=0).model_dump()
+        db.add(User(id='operator-a',tenant_id='tenant-a',email='operator@example.invalid',password_hash='synthetic',role='operator'))
+        db.commit()
+    monkeypatch.setattr(runtime.tasks.dispatch_outbox,'apply_async',lambda *a,**kw:None)
+    return SimpleNamespace(id='operator-a',role='operator')
+
+
+def test_core_groups_fragmented_input_and_persists_context(runtime,monkeypatch):
+    from app.models import Conversation, ConversationTurn, OutboxPart
+    core(runtime,monkeypatch)
+    seen=[]
+    monkeypatch.setattr(runtime.tasks,'_graph_response',lambda db,a,c,instructions,history,*rest: seen.append(history) or 'Horário fictício: 10h.')
+    for key,body in [('first','Bom dia'),('second','qual o horário?')]:
+        runtime.tasks.process_webhook_event.run(event(runtime,key,payload={'phone':'synthetic-contact','normalizedKind':'text','normalizedText':body}))
+    assert runtime.tasks.respond_to_conversation.run('tenant-a','conversation-a',3)=='reply_queued'
+    assert seen[0][-1]['content']=='Bom dia\nqual o horário?'
+    with runtime.db() as db:
+        assert len(db.query(ConversationTurn).one().message_ids)==2
+        assert db.get(Conversation,'conversation-a').context_state['request']=='Bom dia\nqual o horário?'
+        assert db.query(OutboxPart).count()==1
+    assert runtime.tasks.respond_to_conversation.run('tenant-a','conversation-a',3)=='already_enqueued'
+
+
+def test_core_cancel_and_human_commands_preempt_generation(runtime,monkeypatch):
+    from app.models import Conversation, OutboxMessage, ConversationAction
+    core(runtime,monkeypatch)
+    queued=queue(runtime)
+    runtime.tasks.process_webhook_event.run(event(runtime,'cancel-now',payload={'phone':'synthetic-contact','normalizedKind':'text','normalizedText':'Cancela'}))
+    with runtime.db() as db:
+        row=db.get(Conversation,'conversation-a');assert row.status=='paused' and row.pause_reason=='customer_cancel'
+        assert db.get(OutboxMessage,queued).status=='cancelled'
+    runtime.tasks.process_webhook_event.run(event(runtime,'new-request',payload={'phone':'synthetic-contact','normalizedKind':'text','normalizedText':'Agora quero o endereço'}))
+    with runtime.db() as db:assert db.get(Conversation,'conversation-a').status=='open'
+    runtime.tasks.process_webhook_event.run(event(runtime,'human',payload={'phone':'synthetic-contact','normalizedKind':'text','normalizedText':'Quero falar com uma pessoa'}))
+    with runtime.db() as db:
+        assert db.get(Conversation,'conversation-a').status=='human'
+        assert db.query(ConversationAction).count()==2
+        acknowledgment=db.query(OutboxMessage).filter_by(author_kind='system').one()
+        assert 'Não tenho confirmação' in acknowledgment.content
+    assert runtime.tasks.process_webhook_event.run(event(runtime,'follow-human',payload={'phone':'synthetic-contact','normalizedKind':'text','normalizedText':'Outra dúvida'}))=='stored_no_auto_reply'
+
+
+def test_core_takeover_send_idempotency_and_resume_waits_for_new_input(runtime,monkeypatch):
+    from app.routes_conversations import send_human,resume,takeover
+    from app.schemas import ConversationSendRequest,ConversationActionRequest
+    from app.models import ConversationAction, Conversation, OutboxMessage
+    from fastapi import HTTPException
+    operator=core(runtime,monkeypatch)
+    payload=ConversationSendRequest(expected_revision=1,message='Resposta fictícia do operador',idempotency_key='synthetic-human-idempotency')
+    with runtime.db() as db:
+        first=send_human('conversation-a',payload,db,'tenant-a',operator)
+        assert send_human('conversation-a',payload,db,'tenant-a',operator)['id']==first['id']
+        assert db.query(ConversationAction).count()==1
+        assert db.get(Conversation,'conversation-a').status=='human'
+        assert db.get(OutboxMessage,first['id']).operator_id=='operator-a'
+        with pytest.raises(HTTPException) as exc:takeover('conversation-a',ConversationActionRequest(expected_revision=1),db,'tenant-a',operator)
+        assert exc.value.status_code==409
+        revision=db.get(Conversation,'conversation-a').revision
+        resumed=resume('conversation-a',ConversationActionRequest(expected_revision=revision),db,'tenant-a',operator)
+        assert resumed['status']=='open'
+        assert db.get(Conversation,'conversation-a').response_attempts==3
+        assert db.get(OutboxMessage,first['id']).status=='cancelled'
+
+
+def multipart(runtime,monkeypatch):
+    from app.models import ZapiInstance,Conversation
+    core(runtime,monkeypatch)
+    with runtime.db() as db:
+        return runtime.outbox.enqueue(db,db.get(ZapiInstance,'instance-a'),db.get(Conversation,'conversation-a'),'Parte um. Parte dois.',revision=1,parts=['Parte um. ','Parte dois.'],delivery_config={'delay':0}).id
+
+
+def test_core_parts_send_in_order_and_callbacks_aggregate(runtime,monkeypatch):
+    from app.models import OutboxMessage,OutboxPart,Message
+    queued=multipart(runtime,monkeypatch);calls=[]
+    def send(self,destination,content):
+        calls.append(content);return {'messageId':'synthetic-part-'+str(len(calls))}
+    monkeypatch.setattr('app.zapi_client.ZapiClient.send_text',send)
+    assert runtime.outbox.dispatch(queued)=='part_accepted'
+    first=event(runtime,'callback-1',kind='MessageStatusCallback',payload={'status':'READ','ids':['synthetic-part-1']})
+    runtime.tasks.process_webhook_event.run(first)
+    with runtime.db() as db:assert db.get(OutboxMessage,queued).status=='pending'
+    assert runtime.outbox.dispatch(queued)=='accepted'
+    assert calls==['Parte um. ','Parte dois.']
+    second=event(runtime,'callback-2',kind='MessageStatusCallback',payload={'status':'READ','ids':['synthetic-part-2']})
+    runtime.tasks.process_webhook_event.run(second)
+    with runtime.db() as db:
+        assert db.get(OutboxMessage,queued).status=='read'
+        assert db.query(Message).count()==2
+    echo=event(runtime,'synthetic-part-2',payload={'phone':'another-lid','fromMe':True,'normalizedKind':'text','normalizedText':'Parte dois.'})
+    assert runtime.tasks.process_webhook_event.run(echo)=='own_echo_ignored'
+
+
+def test_core_takeover_between_parts_preserves_first_and_cancels_rest(runtime,monkeypatch):
+    from app.routes_conversations import takeover
+    from app.schemas import ConversationActionRequest
+    from app.models import OutboxPart
+    queued=multipart(runtime,monkeypatch)
+    monkeypatch.setattr('app.zapi_client.ZapiClient.send_text',lambda *a:{'messageId':'first-only'})
+    assert runtime.outbox.dispatch(queued)=='part_accepted'
+    with runtime.db() as db:
+        takeover('conversation-a',ConversationActionRequest(expected_revision=1),db,'tenant-a',SimpleNamespace(id='operator-a',role='operator'))
+        assert [p.status for p in db.query(OutboxPart).order_by(OutboxPart.ordinal)]==['accepted','cancelled']
+    assert runtime.outbox.dispatch(queued)=='ignored'
+
+
+def test_core_uncertain_part_stops_following_parts(runtime,monkeypatch):
+    from app.zapi_client import ZapiError
+    from app.models import OutboxPart
+    queued=multipart(runtime,monkeypatch);calls=[]
+    def timeout(*args):calls.append(1);raise ZapiError(0)
+    monkeypatch.setattr('app.zapi_client.ZapiClient.send_text',timeout)
+    assert runtime.outbox.dispatch(queued)=='unknown'
+    runtime.tasks.recover_pending_work.run()
+    assert runtime.outbox.dispatch(queued)=='ignored'
+    assert calls==[1]
+    with runtime.db() as db:assert [p.status for p in db.query(OutboxPart).order_by(OutboxPart.ordinal)]==['unknown','pending']
+
+
+def test_core_memory_requires_approval_and_context_expires(runtime,monkeypatch):
+    from app.models import MemoryItem,Conversation,Agent,LLMConfig,Message,ConversationTurn
+    core(runtime,monkeypatch)
+    with runtime.db() as db:
+        db.add_all([MemoryItem(tenant_id='tenant-a',contact_key='synthetic-contact',content='Unreviewed private preference',approved=False),MemoryItem(tenant_id='tenant-a',contact_key='synthetic-contact',content='Approved synthetic preference',approved=True)])
+        c=db.get(Conversation,'conversation-a');c.context_state={'request':'Expired synthetic question'};c.context_expires_at=datetime.now(timezone.utc)-timedelta(minutes=1)
+        db.add(Message(tenant_id='tenant-a',conversation_id=c.id,direction='incoming',kind='text',content='E os de amanhã?'));db.commit()
+        instructions,history=runtime.tasks._build_context(db,db.get(Agent,'agent-a'),c,[db.get(LLMConfig,'model-a')])
+        assert 'Approved synthetic preference' in instructions and 'Unreviewed private preference' not in instructions
+        assert 'Expired synthetic question' not in instructions
+        assert db.query(ConversationTurn).one().state['previous_request']==''
+        assert history[-1]['content']=='E os de amanhã?'
+
+
+def test_core_continuous_input_maximum_allows_latest_revision(runtime,monkeypatch):
+    from app.models import Conversation
+    core(runtime,monkeypatch)
+    monkeypatch.setattr(runtime.tasks.settings,'message_group_window_seconds',3)
+    monkeypatch.setattr(runtime.tasks,'_graph_response',lambda *a:'Resposta fictícia')
+    with runtime.db() as db:
+        c=db.get(Conversation,'conversation-a');c.turn_started_at=datetime.now(timezone.utc)-timedelta(seconds=25);c.last_incoming_at=datetime.now(timezone.utc);c.revision=4;db.commit()
+    assert runtime.tasks.respond_to_conversation.run('tenant-a','conversation-a',1)=='reply_queued'
+
+
+def test_core_new_references_reject_cross_tenant_at_database(runtime,monkeypatch):
+    from app.models import ConversationTurn,OutboxPart
+    from sqlalchemy.exc import IntegrityError
+    queued=multipart(runtime,monkeypatch)
+    with runtime.db() as db:
+        db.add(ConversationTurn(tenant_id='tenant-b',conversation_id='conversation-a',revision=99,message_ids=[],state={}))
+        with pytest.raises(IntegrityError):db.commit()
+        db.rollback()
+        db.add(OutboxPart(tenant_id='tenant-b',outbox_id=queued,ordinal=99,content='synthetic',status='pending'))
+        with pytest.raises(IntegrityError):db.commit()
+        db.rollback()
+
+
+def test_core_concurrent_dispatch_claims_only_one_part(runtime,monkeypatch):
+    queued=multipart(runtime,monkeypatch)
+    entered,release=threading.Event(),threading.Event();calls=[]
+    def send(*args):calls.append(1);entered.set();assert release.wait(10);return {'messageId':'only-once'}
+    monkeypatch.setattr('app.zapi_client.ZapiClient.send_text',send)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first=pool.submit(runtime.outbox.dispatch,queued);assert entered.wait(10)
+        assert pool.submit(runtime.outbox.dispatch,queued).result(timeout=5)=='busy'
+        release.set();assert first.result(timeout=10)=='part_accepted'
+    assert len(calls)==1
+
+
+def test_core_new_input_during_inference_discards_old_parts(runtime,monkeypatch):
+    from app.models import Message,Conversation,OutboxMessage
+    core(runtime,monkeypatch)
+    with runtime.db() as db:
+        db.add(Message(tenant_id='tenant-a',conversation_id='conversation-a',direction='incoming',kind='text',content='Primeiro pedido'));db.commit()
+    entered,release=threading.Event(),threading.Event()
+    def infer(*args):entered.set();assert release.wait(10);return 'Resposta antiga'
+    monkeypatch.setattr(runtime.tasks,'_graph_response',infer)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first=pool.submit(runtime.tasks.respond_to_conversation.run,'tenant-a','conversation-a',1)
+        assert entered.wait(10)
+        runtime.tasks.process_webhook_event.run(event(runtime,'new-during-inference',payload={'phone':'synthetic-contact','normalizedKind':'text','normalizedText':'Não. Quero outra coisa'}))
+        release.set();assert first.result(timeout=10)=='stale_response'
+    with runtime.db() as db:assert db.query(OutboxMessage).count()==0
+
+
+def test_core_profile_and_actions_enforce_role_and_company(runtime,monkeypatch):
+    from app.routes_agents import save_conversation_policy
+    from app.routes_conversations import takeover
+    from app.schemas import ConversationProfile,ConversationActionRequest
+    from fastapi import HTTPException
+    core(runtime,monkeypatch)
+    with runtime.db() as db:
+        with pytest.raises(HTTPException) as exc:save_conversation_policy('agent-a',ConversationProfile(enabled=True),db,'tenant-a',SimpleNamespace(role='operator'))
+        assert exc.value.status_code==403
+        with pytest.raises(HTTPException) as exc:save_conversation_policy('agent-b',ConversationProfile(enabled=True),db,'tenant-a',runtime.admin)
+        assert exc.value.status_code==404
+        with pytest.raises(HTTPException) as exc:takeover('conversation-a',ConversationActionRequest(expected_revision=1),db,'tenant-b',SimpleNamespace(role='operator',id='operator-a'))
+        assert exc.value.status_code==404
+        with pytest.raises(HTTPException) as exc:takeover('conversation-a',ConversationActionRequest(expected_revision=1),db,'tenant-a',SimpleNamespace(role='viewer',id='operator-a'))
+        assert exc.value.status_code==403
+
+
+def test_core_schema_downgrade_refuses_new_data(runtime,monkeypatch):
+    from app.models import ConversationTurn
+    core(runtime,monkeypatch)
+    with runtime.db() as db:
+        db.add(ConversationTurn(tenant_id='tenant-a',conversation_id='conversation-a',revision=1,message_ids=[],state={}));db.commit()
+    env=dict(os.environ,DATABASE_URL=URL,PYTHONPATH=str(ROOT/'backend'))
+    result=subprocess.run([sys.executable,'-m','alembic','downgrade','0004_model_run_uniqueness'],cwd=ROOT/'backend',env=env,capture_output=True,text=True)
+    assert result.returncode!=0 and 'Downgrade recusado' in result.stderr
+    with runtime.db() as db:
+        assert db.execute(text('SELECT version_num FROM alembic_version')).scalar()=='0005_conversation_core'
+        assert db.query(ConversationTurn).count()==1
+
+
+def test_core_resume_keeps_recent_operator_words_without_restoring_old_filters(runtime,monkeypatch):
+    from app.models import Message,Conversation
+    from app.routes_conversations import send_human,resume
+    from app.schemas import ConversationSendRequest,ConversationActionRequest
+    operator=core(runtime,monkeypatch)
+    monkeypatch.setattr('app.zapi_client.ZapiClient.send_text',lambda *args:{'messageId':'human-accepted'})
+    with runtime.db() as db:
+        row=send_human('conversation-a',ConversationSendRequest(expected_revision=1,message='Condição fictícia explicada pelo operador',idempotency_key='operator-history-test-key'),db,'tenant-a',operator)
+    assert runtime.outbox.dispatch(row['id'])=='accepted'
+    with runtime.db() as db:
+        c=db.get(Conversation,'conversation-a');c.context_state={'request':'Filtro antigo fictício'};db.commit()
+        resume(c.id,ConversationActionRequest(expected_revision=c.revision),db,'tenant-a',operator)
+    runtime.tasks.process_webhook_event.run(event(runtime,'after-human',payload={'phone':'synthetic-contact','normalizedKind':'text','normalizedText':'E o prazo?'}))
+    seen=[]
+    monkeypatch.setattr(runtime.tasks,'_graph_response',lambda db,a,c,i,h,*rest:seen.append((i,h)) or 'Resposta fictícia sem executar ações')
+    with runtime.db() as db:revision=db.get(Conversation,'conversation-a').revision
+    assert runtime.tasks.respond_to_conversation.run('tenant-a','conversation-a',revision)=='reply_queued'
+    assert any('Mensagem de operador' in m['content'] for m in seen[0][1])
+    assert 'Filtro antigo fictício' not in seen[0][0]
+
+
+def test_core_optional_presence_failure_never_prevents_text(runtime,monkeypatch):
+    from app.models import OutboxMessage
+    from app.transport import Receipt
+    queued=multipart(runtime,monkeypatch);calls=[]
+    with runtime.db() as db:
+        db.get(OutboxMessage,queued).delivery_config={'delay':0,'presence':True};db.commit()
+    class FakeTransport:
+        def composing(self,*args):raise RuntimeError('Synthetic presence failure')
+        def send_text(self,*args):calls.append(1);return Receipt('synthetic-presence-id')
+    monkeypatch.setattr(runtime.outbox,'for_instance',lambda _:FakeTransport())
+    assert runtime.outbox.dispatch(queued)=='part_accepted'
+    assert calls==[1]
+
+
+def test_core_rate_limit_counts_parts_not_only_parent(runtime,monkeypatch):
+    from app.models import ZapiInstance,OutboxPart
+    queued=multipart(runtime,monkeypatch)
+    with runtime.db() as db:db.get(ZapiInstance,'instance-a').messages_per_minute=1;db.commit()
+    monkeypatch.setattr('app.zapi_client.ZapiClient.send_text',lambda *a:{'messageId':'only-one-per-minute'})
+    assert runtime.outbox.dispatch(queued)=='part_accepted'
+    assert runtime.outbox.dispatch(queued)=='rate_limited'
+    with runtime.db() as db:assert [p.attempts for p in db.query(OutboxPart).order_by(OutboxPart.ordinal)]==[1,0]
+
+
+def test_core_recovery_marks_abandoned_part_unknown(runtime,monkeypatch):
+    from app.models import OutboxMessage,OutboxPart
+    queued=multipart(runtime,monkeypatch)
+    with runtime.db() as db:
+        parent=db.get(OutboxMessage,queued);parent.status='dispatching';parent.updated_at=datetime.now(timezone.utc)-timedelta(minutes=3)
+        db.query(OutboxPart).filter_by(outbox_id=queued,ordinal=0).one().status='dispatching';db.commit()
+    runtime.tasks.recover_pending_work.run()
+    with runtime.db() as db:
+        assert db.get(OutboxMessage,queued).status=='unknown'
+        assert db.query(OutboxPart).filter_by(outbox_id=queued,ordinal=0).one().status=='unknown'
+    assert runtime.outbox.dispatch(queued)=='ignored'

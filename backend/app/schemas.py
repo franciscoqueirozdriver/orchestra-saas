@@ -118,3 +118,34 @@ class ConversationPolicyUpdate(BaseModel):
     status: str = Field(pattern=r"^(open|human|paused)$")
     consent_status: str = Field(pattern=r"^(unknown|granted|denied)$")
     consent_evidence: str = Field(default="", max_length=1000)
+
+
+class ConversationProfile(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    enabled: bool = False
+    tone: str = Field(default='neutral', pattern=r'^(neutral|formal|friendly)$')
+    conciseness: str = Field(default='balanced', pattern=r'^(short|balanced|detailed)$')
+    emojis: str = Field(default='none', pattern=r'^(none|sparing)$')
+    vocabulary: list[str] = Field(default_factory=list, max_length=20)
+    examples: list[str] = Field(default_factory=list, max_length=3)
+    context_minutes: int = Field(default=60, ge=5, le=1440)
+    max_wait_seconds: int = Field(default=20, ge=3, le=60)
+    part_chars: int = Field(default=1500, ge=300, le=4000)
+    part_delay_seconds: int = Field(default=1, ge=0, le=5)
+    presence: bool = False
+
+    @field_validator('vocabulary','examples')
+    @classmethod
+    def bounded_style(cls, values):
+        if any(not v.strip() or len(v)>1000 for v in values):
+            raise ValueError('Itens de estilo precisam ter de 1 a 1000 caracteres')
+        return [v.strip() for v in values]
+
+
+class ConversationActionRequest(BaseModel):
+    expected_revision: int = Field(ge=0)
+
+
+class ConversationSendRequest(ConversationActionRequest):
+    message: str = Field(min_length=1,max_length=4000)
+    idempotency_key: str = Field(min_length=16,max_length=80)

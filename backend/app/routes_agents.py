@@ -85,3 +85,25 @@ def delete_agent(agent_id: str, db: DbSession, tenant_id: TenantId, user: Curren
         raise HTTPException(status_code=404, detail="Agente não encontrado")
     db.delete(row)
     db.commit()
+
+
+@router.get('/agents/{agent_id}/conversation-policy')
+def read_conversation_policy(agent_id: str, db: DbSession, tenant_id: TenantId):
+    from app.conversation.service import profile_for
+    row=db.query(Agent).filter_by(id=agent_id,tenant_id=tenant_id).first()
+    if not row:raise HTTPException(404,detail='Agente não encontrado')
+    return profile_for(row).model_dump()
+
+
+from app.schemas import ConversationProfile
+
+
+@router.put('/agents/{agent_id}/conversation-policy')
+@serialized_mutation
+def save_conversation_policy(agent_id: str, payload: ConversationProfile, db: DbSession, tenant_id: TenantId, user: CurrentUser):
+    _require_admin(user)
+    row=db.query(Agent).filter_by(id=agent_id,tenant_id=tenant_id).first()
+    if not row:raise HTTPException(404,detail='Agente não encontrado')
+    row.conversation_profile=payload.model_dump()
+    db.commit()
+    return row.conversation_profile

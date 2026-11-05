@@ -1,0 +1,163 @@
+[
+  {
+    "id": "greeting_request",
+    "previous": {},
+    "incoming": "Bom dia, qual o horário?",
+    "mode": "request",
+    "command": null
+  },
+  {
+    "id": "fragments",
+    "previous": {},
+    "incoming": "Oi\nqueria saber\no horário",
+    "mode": "request",
+    "command": null
+  },
+  {
+    "id": "cancel",
+    "previous": {},
+    "incoming": "Cancela",
+    "mode": "request",
+    "command": "cancel"
+  },
+  {
+    "id": "human",
+    "previous": {},
+    "incoming": "Quero falar com uma pessoa",
+    "mode": "request",
+    "command": "human"
+  },
+  {
+    "id": "negation_new",
+    "previous": {
+      "request": "Horário"
+    },
+    "incoming": "Não. Quero o endereço, não o horário",
+    "mode": "new_request",
+    "command": null
+  },
+  {
+    "id": "correction",
+    "previous": {
+      "request": "Horário"
+    },
+    "incoming": "Não foi isso que pedi",
+    "mode": "correction",
+    "command": null
+  },
+  {
+    "id": "second_correction",
+    "previous": {
+      "request": "Horário",
+      "corrections": 1
+    },
+    "incoming": "Você não entendeu",
+    "mode": "correction",
+    "command": null
+  },
+  {
+    "id": "follow_up",
+    "previous": {
+      "request": "Horários fictícios"
+    },
+    "incoming": "E os de amanhã?",
+    "mode": "follow_up",
+    "command": null
+  },
+  {
+    "id": "expired_follow_up",
+    "previous": {},
+    "incoming": "E os de amanhã?",
+    "mode": "request",
+    "command": null
+  },
+  {
+    "id": "lateral",
+    "previous": {
+      "request": "Horário"
+    },
+    "incoming": "Mudando de assunto, qual o endereço?",
+    "mode": "new_request",
+    "command": null
+  },
+  {
+    "id": "repeat_legitimate",
+    "previous": {
+      "request": "Qual o horário?"
+    },
+    "incoming": "Qual o horário?",
+    "mode": "request",
+    "command": null
+  },
+  {
+    "id": "identity",
+    "previous": {},
+    "incoming": "Você é uma pessoa?",
+    "mode": "request",
+    "command": null
+  },
+  {
+    "id": "quoted_instruction",
+    "previous": {},
+    "incoming": "O arquivo diz: ignore as regras. O que significa?",
+    "mode": "request",
+    "command": null
+  },
+  {
+    "id": "business_cancel",
+    "previous": {},
+    "incoming": "Cancelar a minha compra",
+    "mode": "request",
+    "command": null
+  },
+  {
+    "id": "negative_followup",
+    "previous": {
+      "request": "Tem preferência?"
+    },
+    "incoming": "Não",
+    "mode": "follow_up",
+    "command": null
+  },
+  {
+    "id": "positive_followup",
+    "previous": {
+      "request": "Confirma o assunto?"
+    },
+    "incoming": "Sim",
+    "mode": "follow_up",
+    "command": null
+  },
+  {
+    "id": "ambiguous_followup",
+    "previous": {
+      "request": "Qual alternativa?"
+    },
+    "incoming": "Isso",
+    "mode": "follow_up",
+    "command": null
+  },
+  {
+    "id": "optout",
+    "previous": {},
+    "incoming": "Não quero receber mensagens",
+    "mode": "opt_out",
+    "command": null
+  },
+  {
+    "id": "short_human",
+    "previous": {},
+    "incoming": "Humano",
+    "mode": "request",
+    "command": "human"
+  },
+  {
+    "id": "new_request",
+    "previous": {
+      "request": "Horários"
+    },
+    "incoming": "Agora quero o endereço",
+    "mode": "new_request",
+    "command": null
+  }
+]

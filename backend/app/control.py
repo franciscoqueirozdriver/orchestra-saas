@@ -1,19 +1,24 @@
 """Revision invalidation is shared by every supported configuration mutation."""
 from sqlalchemy import select
-from app.models import Conversation, OutboxMessage
+from app.models import Conversation, OutboxMessage, OutboxPart
 
 
-def invalidate_conversations(db, tenant_id, instance_id=None):
+def invalidate_conversations(db, tenant_id, instance_id=None, conversation_id=None):
     query = db.query(Conversation).filter(Conversation.tenant_id == tenant_id)
     if instance_id is not None:
         query = query.filter(Conversation.instance_id == instance_id)
     ids = select(Conversation.id).where(Conversation.tenant_id == tenant_id)
     if instance_id is not None:
         ids = ids.where(Conversation.instance_id == instance_id)
+    if conversation_id is not None:
+        query=query.filter(Conversation.id==conversation_id)
+        ids=ids.where(Conversation.id==conversation_id)
     db.query(OutboxMessage).filter(
         OutboxMessage.tenant_id == tenant_id, OutboxMessage.conversation_id.in_(ids),
         OutboxMessage.response_revision.isnot(None), OutboxMessage.status.in_(['pending', 'retry_wait'])
     ).update({OutboxMessage.status: 'cancelled', OutboxMessage.last_error: 'configuration_changed'}, synchronize_session=False)
+    cancelled=select(OutboxMessage.id).where(OutboxMessage.tenant_id==tenant_id,OutboxMessage.conversation_id.in_(ids),OutboxMessage.status=='cancelled')
+    db.query(OutboxPart).filter(OutboxPart.tenant_id==tenant_id,OutboxPart.outbox_id.in_(cancelled),OutboxPart.status=='pending').update({'status':'cancelled'},synchronize_session=False)
     query.update({Conversation.revision: Conversation.revision + 1, Conversation.response_attempts: 0}, synchronize_session=False)
 
 
@@ -34,7 +39,7 @@ def serialized_mutation(fn):
         with tenant_guard(tenant_id):
             db.expire_all()
             result = fn(*args, **kwargs)
-            invalidate_conversations(db, tenant_id)
+            invalidate_conversations(db, tenant_id, conversation_id=values.get("conversation_id"))
             db.commit()
             return result
     return guarded
