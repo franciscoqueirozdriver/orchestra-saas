@@ -34,11 +34,17 @@ def upgrade():
         sa.Column("attempts",sa.JSON(),nullable=False),
         sa.Column("selected_config_id",sa.String(36)),
         sa.Column("status",sa.String(32),nullable=False),
-        sa.Column("created_at",sa.DateTime(timezone=True),server_default=sa.func.now()))
+        sa.Column("created_at",sa.DateTime(timezone=True),server_default=sa.func.now(),nullable=False))
     op.create_index("ix_model_runs_tenant_id","model_runs",["tenant_id"])
     op.create_index("ix_model_runs_conversation_id","model_runs",["conversation_id"])
 
 def downgrade():
+    # Refuse before touching schema; never discard extra provider connections.
+    duplicates = op.get_bind().execute(sa.text(
+        "SELECT 1 FROM llm_configs GROUP BY tenant_id HAVING count(*) > 1 LIMIT 1"
+    )).first()
+    if duplicates:
+        raise RuntimeError("Downgrade recusado: múltiplas conexões por empresa; reconcilie sem apagar dados")
     op.drop_table("model_runs")
     op.drop_index("ix_agents_llm_config_id",table_name="agents")
     op.drop_column("agents","fallback_config_ids")

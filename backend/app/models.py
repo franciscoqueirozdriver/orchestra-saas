@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 import uuid
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -73,6 +73,7 @@ class ZapiInstance(Base):
 
 class LLMConfig(Base):
     __tablename__ = "llm_configs"
+    __table_args__ = (Index("uq_llm_default_tenant", "tenant_id", unique=True, postgresql_where=text("is_default")),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False, default="Principal", server_default="Principal")

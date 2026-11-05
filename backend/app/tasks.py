@@ -300,7 +300,7 @@ def respond_to_conversation(self, tenant_id: str, conversation_id: str, expected
             Agent.enabled.is_(True),
             Agent.auto_reply_enabled.is_(True),
         ).first()
-        latest_llm = db.query(LLMConfig).filter(LLMConfig.tenant_id == tenant_id).first()
+        latest_llm = db.query(LLMConfig).filter(LLMConfig.tenant_id == tenant_id, LLMConfig.id == llm.id).first()
         latest_instance = db.query(ZapiInstance).filter(
             ZapiInstance.id == instance.id,
             ZapiInstance.tenant_id == tenant_id,
