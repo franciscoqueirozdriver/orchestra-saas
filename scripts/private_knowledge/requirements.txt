@@ -1,0 +1,2 @@
+# Optional LOCAL tooling only; intentionally absent from backend production image.
+faster-whisper==1.2.1

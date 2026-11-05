@@ -83,8 +83,10 @@ administrativa, não aos documentos.
 
 ## Limites da entrega atual
 
-Só proteção, inventário de metadados e processo estão implementados/documentados.
-Não há pipeline autorizado de extração, anonimização, curadoria ou publicação.
+A primeira entrega cobriu proteção e inventário. A etapa seguinte implementa
+[ingestão local e uma amostra](ingestao-local-whatsapp.md), com transcrição offline,
+staging privado e propostas pendentes de revisão. Não há publicação automática
+nem processamento integral autorizado do acervo.
 A API atual de upload de documentos chama embeddings: não usá-la para conversas
 brutas ou candidatos pendentes. Também não usar estes arquivos como prompts de
 teste, logs, anexos de PR ou conteúdo de imagens Docker.

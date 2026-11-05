@@ -19,3 +19,11 @@ backups/
 
 # Exportações locais de conversas e mídias; não são código nem fixtures públicas.
 /docs/Conversas/
+
+# Local private ingestion artifacts (must also be stored outside this repository).
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+/private-knowledge/
