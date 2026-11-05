@@ -26,8 +26,10 @@ As chaves são criptografadas no armazenamento e nunca são retornadas pela API.
 Ao editar, chave vazia mantém a atual. Alterar a URL de geração exige informar
 a chave novamente, evitando encaminhar a credencial antiga a outro destino.
 
-A busca de conhecimento usa os embeddings da **conexão padrão da empresa**,
-mesmo quando o agente seleciona outra conexão para gerar respostas. A dimensão
+A busca tem configuração própria em **Conhecimento → Configurar busca**.
+Enquanto não houver configuração própria, utiliza os embeddings da conexão
+padrão da empresa por compatibilidade. Consulte
+[armazenamento e busca](conhecimento/armazenamento-e-busca.md). A dimensão
 atual é 1536 e o transporte de embeddings é compatível com OpenAI. Gemini e
 Anthropic nativos precisam de endpoint e chave de embeddings separados.
 

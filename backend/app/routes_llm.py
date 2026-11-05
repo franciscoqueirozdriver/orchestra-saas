@@ -2,7 +2,7 @@ from app.control import serialized_mutation
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import text
 from app.dependencies import CurrentUser, DbSession, TenantId
-from app.models import Agent, LLMConfig, ModelRun, KnowledgeDocument
+from app.models import Agent, LLMConfig, ModelRun, KnowledgeDocument, KnowledgeSearchConfig
 from app.schemas import LLMConfigUpsert
 from app.provider_catalog import catalog
 from app.embedding_config import embedding_spec
@@ -43,7 +43,7 @@ def _save(db,tenant_id,payload,row=None):
             prospective.embedding_base_url=old_spec[0]
         if old_spec and (generation_moves or separate_key_rotates) and not payload.embedding_api_key and not row.embedding_api_key_encrypted:
             frozen_key=row.api_key_encrypted
-        if row.is_default and old_spec and old_spec!=embedding_spec(prospective) and db.query(KnowledgeDocument).filter_by(tenant_id=tenant_id,status='indexed').first():
+        if row.is_default and not db.get(KnowledgeSearchConfig,tenant_id) and old_spec and old_spec!=embedding_spec(prospective) and db.query(KnowledgeDocument).filter_by(tenant_id=tenant_id,status='indexed').first():
             raise HTTPException(409,'Há documentos indexados: preserve a URL/modelo de embeddings; sua alteração exige reindexação planejada')
     else:
         if not payload.api_key:raise HTTPException(422,'Informe a chave para criar a conexão')
@@ -87,7 +87,7 @@ def make_default(config_id:str,db:DbSession,tenant_id:TenantId,user:CurrentUser)
     row=_get(db,tenant_id,config_id)
     if not row.enabled:raise HTTPException(409,'Habilite a conexão antes de defini-la como padrão')
     previous=db.query(LLMConfig).filter_by(tenant_id=tenant_id,is_default=True).first()
-    if previous and previous.id!=row.id and embedding_spec(previous)!=embedding_spec(row) and db.query(KnowledgeDocument).filter_by(tenant_id=tenant_id,status='indexed').first():
+    if previous and not db.get(KnowledgeSearchConfig,tenant_id) and previous.id!=row.id and embedding_spec(previous)!=embedding_spec(row) and db.query(KnowledgeDocument).filter_by(tenant_id=tenant_id,status='indexed').first():
         raise HTTPException(409,'Há documentos indexados: mantenha a mesma configuração de embeddings antes de mudar o padrão')
     for agent in db.query(Agent).filter_by(tenant_id=tenant_id,llm_config_id=None):
         if row.id in (agent.fallback_config_ids or []):

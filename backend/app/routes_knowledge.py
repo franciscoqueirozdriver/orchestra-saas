@@ -12,9 +12,12 @@ from app.config import settings
 from app.database import get_db
 from app.dependencies import get_current_user, get_tenant_id
 from app.embedding_client import embed_texts
-from app.embedding_config import embedding_request_config
+from app.embedding_config import knowledge_embedding_config
 from app.llm_client import LLMError
-from app.models import KnowledgeChunk, KnowledgeDocument, LLMConfig, User
+from app.models import KnowledgeChunk, KnowledgeDocument, KnowledgeSearchConfig, User
+from app.control import serialized_mutation
+from app.security import encrypt_secret
+from app.schemas import KnowledgeSearchUpsert
 
 router = APIRouter(prefix="/api/knowledge/documents", tags=["conhecimento"])
 
@@ -102,24 +105,71 @@ async def upload_document(
         raise HTTPException(status_code=422, detail="Não foi possível ler o documento") from exc
     if not chunks:
         raise HTTPException(status_code=422, detail="Documento sem texto extraível")
-    llm = db.query(LLMConfig).filter(LLMConfig.tenant_id == tenant_id, LLMConfig.is_default.is_(True)).first()
-    if llm is None:
-        raise HTTPException(status_code=409, detail="Configure um provedor de embeddings antes de indexar documentos")
-    try:
-        embedding_base_url,embedding_model,embedding_key=embedding_request_config(llm)
-        vectors = embed_texts(embedding_base_url,embedding_model,embedding_key,chunks)
-    except LLMError as exc:
-        raise HTTPException(status_code=409 if exc.category=="configuration" else 502, detail=str(exc)) from exc
-    doc = KnowledgeDocument(tenant_id=tenant_id, filename=filename, mime_type=mime_type, status="indexed")
+    doc = KnowledgeDocument(tenant_id=tenant_id, filename=filename, mime_type=mime_type,
+                            status="pending_index", extracted_text=text.replace("\x00", ""))
     db.add(doc)
-    db.flush()
-    db.add_all([KnowledgeChunk(tenant_id=tenant_id, document_id=doc.id, content=chunk, embedding=vector, embedding_model=llm.embedding_model) for chunk, vector in zip(chunks, vectors, strict=True)])
     db.commit()
     db.refresh(doc)
-    return {"id": doc.id, "filename": doc.filename, "mime_type": doc.mime_type, "status": doc.status, "chunk_count": len(chunks), "created_at": doc.created_at.isoformat()}
+    return {"id": doc.id, "filename": doc.filename, "mime_type": doc.mime_type,
+            "status": doc.status, "chunk_count": 0, "created_at": doc.created_at.isoformat()}
+
+
+@router.get("/search-settings")
+def get_search_settings(db: Session = Depends(get_db), tenant_id: str = Depends(get_tenant_id)):
+    row=db.get(KnowledgeSearchConfig,tenant_id)
+    try:
+        base,model,_=knowledge_embedding_config(db,tenant_id)
+        return {"configured":True,"source":"dedicated" if row else "legacy", "base_url":base,"model":model,"dimensions":1536}
+    except LLMError:
+        return {"configured":False,"source":"none","base_url":"","model":"","dimensions":1536}
+
+
+@router.put("/search-settings")
+@serialized_mutation
+def save_search_settings(payload: KnowledgeSearchUpsert, db: Session = Depends(get_db),
+                         tenant_id: str = Depends(get_tenant_id), user: User = Depends(get_current_user)):
+    _require_admin(user)
+    row=db.get(KnowledgeSearchConfig,tenant_id)
+    try:
+        base,model,_=knowledge_embedding_config(db,tenant_id)
+    except LLMError:
+        base=model=None
+    if (base,model)!=(payload.base_url,payload.model) and db.query(KnowledgeDocument).filter_by(tenant_id=tenant_id,status='indexed').first():
+        raise HTTPException(409,'Há documentos indexados: alterar a busca exige reindexação planejada')
+    if not payload.api_key and (row is None or row.embedding_base_url!=payload.base_url):
+        raise HTTPException(422,'Informe a chave da busca ao configurar ou alterar o endpoint')
+    if row is None:
+        row=KnowledgeSearchConfig(tenant_id=tenant_id);db.add(row)
+    row.embedding_base_url=payload.base_url;row.embedding_model=payload.model
+    if payload.api_key:row.embedding_api_key_encrypted=encrypt_secret(payload.api_key)
+    db.commit()
+    return get_search_settings(db,tenant_id)
+
+
+@router.post("/{document_id}/index")
+@serialized_mutation
+def index_document(document_id: str, db: Session = Depends(get_db),
+                   tenant_id: str = Depends(get_tenant_id), user: User = Depends(get_current_user)):
+    _require_admin(user)
+    doc=db.query(KnowledgeDocument).filter_by(id=document_id,tenant_id=tenant_id).first()
+    if doc is None:raise HTTPException(404,'Documento não encontrado')
+    if doc.status=='indexed':return {"id":doc.id,"status":doc.status}
+    if not doc.extracted_text:raise HTTPException(409,'Reenvie o documento: texto original indisponível nesta versão antiga')
+    chunks=_chunks(doc.extracted_text)
+    try:
+        base,model,key=knowledge_embedding_config(db,tenant_id)
+        vectors=embed_texts(base,model,key,chunks)
+    except LLMError as exc:
+        raise HTTPException(409 if exc.category=='configuration' else 502,str(exc)) from exc
+    db.query(KnowledgeChunk).filter_by(tenant_id=tenant_id,document_id=doc.id).delete(synchronize_session=False)
+    db.add_all([KnowledgeChunk(tenant_id=tenant_id,document_id=doc.id,content=chunk,embedding=vector,embedding_model=model)
+                for chunk,vector in zip(chunks,vectors,strict=True)])
+    doc.status='indexed';db.commit()
+    return {"id":doc.id,"status":doc.status,"chunk_count":len(chunks)}
 
 
 @router.delete("/{document_id}", status_code=204)
+@serialized_mutation
 def delete_document(
     document_id: str,
     db: Session = Depends(get_db),

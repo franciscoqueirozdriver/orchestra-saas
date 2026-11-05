@@ -153,10 +153,19 @@ class WebhookEvent(Base):
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+class KnowledgeSearchConfig(Base):
+    __tablename__ = "knowledge_search_configs"
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), primary_key=True)
+    embedding_base_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    embedding_model: Mapped[str] = mapped_column(String(160), nullable=False)
+    embedding_api_key_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class KnowledgeDocument(Base):
     __tablename__ = "knowledge_documents"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    extracted_text: Mapped[str | None] = mapped_column(Text)
     filename: Mapped[str] = mapped_column(String(240), nullable=False)
     mime_type: Mapped[str] = mapped_column(String(120), nullable=False, default="text/plain")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="indexed")
