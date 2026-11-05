@@ -56,3 +56,28 @@ def test_native_generation_does_not_silently_inherit_an_embedding_endpoint():
     assert exc.value.category=='configuration'
     row.embedding_base_url='https://embedding.invalid/v1';row.embedding_api_key_encrypted=encrypt_secret('embedding-key')
     assert embedding_request_config(row)==('https://embedding.invalid/v1','synthetic','embedding-key')
+
+
+def test_google_embeddings_request_1536_and_normalize_without_changing_other_providers(monkeypatch):
+    from app.embedding_client import embed_texts
+    monkeypatch.setattr('app.embedding_client.validate_public_https',lambda _:None)
+    calls=[]
+    def post(url,**kwargs):
+        calls.append((url,kwargs))
+        return httpx.Response(200,json={'data':[{'index':0,'embedding':[2.0]+[0.0]*1535}]})
+    monkeypatch.setattr('app.embedding_client.httpx.post',post)
+    result=embed_texts('https://generativelanguage.googleapis.com/v1beta/openai','gemini-embedding-001','synthetic-key',['Synthetic text'])
+    assert calls[-1][1]['json']['dimensions']==1536
+    assert calls[-1][0].endswith('/openai/embeddings')
+    assert calls[-1][1]['headers']['Authorization']=='Bearer synthetic-key'
+    assert result[0][0]==1.0 and len(result[0])==1536
+    embed_texts('https://other.invalid/v1','synthetic','synthetic-key',['Synthetic text'])
+    assert 'dimensions' not in calls[-1][1]['json']
+
+
+@pytest.mark.parametrize('size',[1024,3072])
+def test_wrong_embedding_dimensions_are_rejected(monkeypatch,size):
+    from app.embedding_client import embed_texts
+    monkeypatch.setattr('app.embedding_client.validate_public_https',lambda _:None)
+    monkeypatch.setattr('app.embedding_client.httpx.post',lambda *a,**k:httpx.Response(200,json={'data':[{'embedding':[1.0]*size}]}))
+    with pytest.raises(LLMError):embed_texts('https://synthetic.invalid/v1','synthetic','synthetic',['Synthetic'])

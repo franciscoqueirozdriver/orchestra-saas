@@ -105,6 +105,8 @@ def resume_connection(config_id:str,db:DbSession,tenant_id:TenantId,user:Current
 def delete_connection(config_id:str,db:DbSession,tenant_id:TenantId,user:CurrentUser):
     _require_admin(user);row=_get(db,tenant_id,config_id)
     agents=db.query(Agent).filter(Agent.tenant_id==tenant_id).all()
+    if db.query(KnowledgeSearchConfig).filter_by(tenant_id=tenant_id,connection_id=config_id).first():
+        raise HTTPException(409,"Esta conexão é usada pela busca da base de conhecimento")
     if row.is_default or any(x.llm_config_id==config_id or config_id in (x.fallback_config_ids or []) for x in agents):
         raise HTTPException(409,"Remova os vínculos e altere a conexão padrão antes de excluir")
     db.delete(row);db.commit()

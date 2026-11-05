@@ -9,13 +9,14 @@ const server=http.createServer((req,res)=>{const f=files[req.url];if(!f){res.wri
  const browser=await chromium.launch({executablePath:process.env.CHROME_PATH||'/usr/bin/google-chrome',headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
  try{
   const page=await browser.newPage();const errors=[],external=[],mutations=[];page.on('pageerror',e=>errors.push(e.message));
-  let saved=false,indexed=false,configured=false;const calls=[];
+  let saved=false,indexed=false,configured=false;const calls=[],payloads=[];
   await page.route('**/*',async route=>{
    const req=route.request(),u=new URL(req.url());if(u.origin!==origin){external.push(u.hostname);return route.abort();}if(!u.pathname.startsWith('/api/'))return route.continue();
    calls.push([req.method(),u.pathname]);let data,status=200;
    if(u.pathname==='/api/dashboard/summary')data={counts:{}};
+   else if(u.pathname==='/api/llm/connections')data=[{id:'google-a',name:'Gemini sintético',provider:'gemini',resolved_protocol:'gemini',enabled:true}];
    else if(u.pathname==='/api/knowledge/documents/search-settings'){
-    if(req.method()==='PUT')configured=true;
+    if(req.method()==='PUT'){configured=true;payloads.push(req.postDataJSON());}
     data={configured,source:configured?'dedicated':'none',base_url:configured?'https://embedding.invalid/v1':'',model:configured?'synthetic-model':''};
    }else if(u.pathname==='/api/knowledge/documents/doc-a/index'){
     if(!configured){status=409;data={detail:'Configure a busca na base de conhecimento antes de indexar'};}
@@ -36,11 +37,13 @@ const server=http.createServer((req,res)=>{const f=files[req.url];if(!f){res.wri
   page.on('dialog',dialog=>dialog.accept());
   await page.getByRole('button',{name:'Indexar para busca'}).click();await page.getByText('Configure a busca na base de conhecimento antes de indexar',{exact:true}).waitFor();
   await page.getByRole('button',{name:'Configurar busca',exact:true}).click();
-  await page.locator('#search-base').fill('https://embedding.invalid/v1');await page.locator('#search-model').fill('synthetic-model');await page.locator('#search-key').fill('synthetic-key');
+  await page.locator('#search-connection').selectOption('google-a');
+  assert.equal(await page.locator('#search-model').inputValue(),'gemini-embedding-001');
+  assert.equal(await page.locator('#search-key').isVisible(),false);
   await page.getByRole('button',{name:'Salvar configuração',exact:true}).click();await page.waitForFunction(()=>!document.querySelector('#modal').open);
   await page.getByRole('button',{name:'Indexar para busca'}).click();await page.getByText('Disponível para busca',{exact:true}).waitFor();
   assert.equal(await page.getByRole('button',{name:'Indexar para busca'}).count(),0);
-  assert.ok(!calls.some(c=>c[1].includes('/llm/')));assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
+  assert.deepEqual(payloads,[{model:'gemini-embedding-001',connection_id:'google-a'}]);assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
   console.log('UI conhecimento aprovada: salvar sem IA, pendência, configuração própria e indexação explícita.');
  }finally{await browser.close();server.close();}
 })().catch(e=>{console.error(e);server.close();process.exitCode=1;});

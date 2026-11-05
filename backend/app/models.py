@@ -155,6 +155,7 @@ class WebhookEvent(Base):
 
 class KnowledgeSearchConfig(Base):
     __tablename__ = "knowledge_search_configs"
+    connection_id: Mapped[str | None] = mapped_column(ForeignKey("llm_configs.id", ondelete="RESTRICT"))
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), primary_key=True)
     embedding_base_url: Mapped[str] = mapped_column(String(500), nullable=False)
     embedding_model: Mapped[str] = mapped_column(String(160), nullable=False)

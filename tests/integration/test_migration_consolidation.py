@@ -76,7 +76,7 @@ def test_frozen_initial_and_legacy_upgrade_preserve_schema_and_synthetic_data():
         alembic(ROOT, 'upgrade', 'head')
         upgraded = shape(engine)
         with engine.connect() as c:
-            assert c.scalar(text('SELECT version_num FROM alembic_version')) == '0006_knowledge_storage'
+            assert c.scalar(text('SELECT version_num FROM alembic_version')) == '0007_search_connection'
             assert c.scalar(text("SELECT count(*) FROM messages WHERE content='synthetic only'")) == 1
             assert c.scalar(text("SELECT last_incoming_at IS NOT NULL FROM conversations WHERE id='conversation-a'"))
             assert c.scalar(text("SELECT is_default FROM llm_configs WHERE id='llm-a'"))
