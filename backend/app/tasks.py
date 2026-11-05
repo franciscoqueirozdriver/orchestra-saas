@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import logging
 import math
 import secrets
@@ -16,6 +16,8 @@ from app.config import settings
 from app.database import SessionLocal
 from app.embedding_client import embed_texts
 from app.llm_client import LLMError, complete
+from app.model_router import generate_with_fallback, candidate_configs
+from app.policy import is_opt_out, sending_denial, advance_status
 from app.models import Agent, Conversation, KnowledgeChunk, KnowledgeDocument, LLMConfig, MemoryItem, Message, OutboxMessage, WebhookEvent, ZapiInstance
 from app.security import decrypt_secret
 from app.zapi_client import ZapiClient, ZapiError
@@ -31,6 +33,7 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_ignore_result=True,
     broker_connection_retry_on_startup=True,
+    beat_schedule={"recover-durable-work":{"task":"app.tasks.recover_pending_work","schedule":30.0}},
 )
 
 
@@ -54,9 +57,9 @@ def _is_true(value) -> bool:
     return value is True or (isinstance(value, str) and value.strip().lower() in {"true", "1", "yes"})
 
 
-def _graph_response(provider: str, base_url: str, model: str, api_key: str, instructions: str, history: list[dict[str, str]], thread_id: str) -> str:
+def _graph_response(db, agent, conversation, instructions: str, history: list[dict[str, str]], thread_id: str) -> str:
     def draft(state: AgentState) -> dict[str, str]:
-        return {"response": complete(provider, base_url, model, api_key, state["instructions"], state["history"])}
+        return {"response": generate_with_fallback(db, agent, conversation, state["instructions"], state["history"])}
 
     builder = StateGraph(AgentState)
     builder.add_node("draft", draft)
@@ -98,15 +101,17 @@ def process_webhook_event(self, event_id: str) -> str:
         event = db.query(WebhookEvent).filter(WebhookEvent.id == event_id).first()
         if event is None or event.processed:
             return "ignored"
+        event.attempts += 1
+        event.last_attempt_at = datetime.now(timezone.utc)
+        db.commit()
         payload = event.payload
         if event.event_type != "ReceivedCallback":
-            _finalize_event(db, event, error="callback type is recorded but not processed by this version")
-            return "unsupported_callback"
-        if _is_true(payload.get("fromMe")) or _is_true(payload.get("isGroup")):
-            _finalize_event(db, event)
-            return "stored_no_auto_reply"
+            return _process_operational_event(db,event)
+        if _is_true(payload.get("isGroup")):
+            _finalize_event(db,event)
+            return "group_ignored"
 
-        contact = str(payload.get("senderLid") or payload.get("phone") or payload.get("participantLid") or payload.get("participantPhone") or "").strip()[:180]
+        contact = str(payload.get("chatLid") or payload.get("senderLid") or payload.get("phone") or payload.get("participantLid") or payload.get("participantPhone") or "").strip()[:180]
         if not contact:
             _finalize_event(db, event, error="callback has no recognized contact identifier")
             return "invalid_contact"
@@ -140,12 +145,19 @@ def process_webhook_event(self, event_id: str) -> str:
                 tenant_id=event.tenant_id,
                 conversation_id=conversation.id,
                 external_id=event.event_key,
-                direction="incoming",
+                direction="outgoing" if _is_true(payload.get("fromMe")) else "incoming",
                 kind=kind,
                 content=stored_content,
                 status="received",
             ))
             conversation.revision = (conversation.revision or 0) + 1
+            conversation.response_attempts = 0
+            if not _is_true(payload.get("fromMe")):
+                conversation.last_incoming_at = datetime.now(timezone.utc)
+            if kind == "text" and not _is_true(payload.get("fromMe")) and is_opt_out(content):
+                conversation.opted_out = True
+                conversation.consent_status = "denied"
+                conversation.consent_evidence = "opt_out_incoming_message:" + event.event_key
             conversation.last_message_at = datetime.now(timezone.utc)
             if not conversation.contact_name:
                 conversation.contact_name = str(payload.get("senderName") or payload.get("chatName") or "")[:180]
@@ -153,6 +165,9 @@ def process_webhook_event(self, event_id: str) -> str:
         else:
             db.refresh(conversation)
 
+        if _is_true(payload.get("fromMe")) or conversation.opted_out:
+            _finalize_event(db,event)
+            return "stored_no_auto_reply"
         revision = int(conversation.revision or 0)
         try:
             # Repetições de callback também reprogramam uma resposta que possa ter ficado órfã.
@@ -185,7 +200,7 @@ def respond_to_conversation(self, tenant_id: str, conversation_id: str, expected
     redis_client = Redis.from_url(settings.redis_url, decode_responses=True, socket_connect_timeout=3, socket_timeout=3)
     lock = None
     try:
-        lock = redis_client.lock(f"conversation-reply:{tenant_id}:{conversation_id}", timeout=180, blocking_timeout=1)
+        lock = redis_client.lock(f"conversation-reply:{tenant_id}:{conversation_id}", timeout=1800, blocking_timeout=1)
         if not lock.acquire(blocking=True):
             raise self.retry(exc=RuntimeError("conversation response lock busy"), countdown=2)
 
@@ -209,30 +224,27 @@ def respond_to_conversation(self, tenant_id: str, conversation_id: str, expected
         ).first():
             return "response_revision_already_dispatched"
 
-        agent = db.query(Agent).filter(
-            Agent.tenant_id == tenant_id,
-            Agent.enabled.is_(True),
-            Agent.auto_reply_enabled.is_(True),
-        ).order_by(Agent.created_at.asc()).first()
-        llm = db.query(LLMConfig).filter(LLMConfig.tenant_id == tenant_id).first()
-        instance = db.query(ZapiInstance).filter(
-            ZapiInstance.id == conversation.instance_id,
-            ZapiInstance.tenant_id == tenant_id,
-            ZapiInstance.is_active.is_(True),
-        ).first()
-        if not agent or not llm or not instance:
-            return "auto_reply_disabled_or_missing_configuration"
+        instance = db.query(ZapiInstance).filter(ZapiInstance.id==conversation.instance_id,ZapiInstance.tenant_id==tenant_id,ZapiInstance.is_active.is_(True)).first()
+        if not instance or not instance.agent_id or sending_denial(instance, conversation):
+            return "instance_unassigned_or_policy_denied"
+        agent = db.query(Agent).filter(Agent.id==instance.agent_id,Agent.tenant_id==tenant_id,Agent.enabled.is_(True),Agent.auto_reply_enabled.is_(True)).first()
+        if not agent: return "auto_reply_disabled"
+        configs = candidate_configs(db, agent)
+        if not configs: return "provider_configuration_missing"
+        if conversation.response_attempts >= 3: return "response_attempts_exhausted"
+        conversation.response_attempts += 1
+        db.commit()
+        llm = db.query(LLMConfig).filter(LLMConfig.tenant_id==tenant_id,LLMConfig.is_default.is_(True)).first()
+        if llm is None: llm = configs[0]
         api_key = decrypt_secret(llm.api_key_encrypted)
-        if not api_key:
-            return "provider_key_missing"
 
         messages = db.query(Message).filter(
             Message.tenant_id == tenant_id,
             Message.conversation_id == conversation_id,
-        ).order_by(Message.created_at.desc()).limit(14).all()
+        ).order_by(Message.created_at.desc(), Message.id.desc()).all()
         messages.reverse()
         history: list[dict[str, str]] = [
-            {"role": "user" if item.direction == "incoming" else "assistant", "content": item.content[:6000]}
+            {"role": "user" if item.direction == "incoming" else "assistant", "content": item.content}
             for item in messages if item.content
         ]
         context_parts: list[str] = []
@@ -270,10 +282,11 @@ def respond_to_conversation(self, tenant_id: str, conversation_id: str, expected
         if context_parts:
             instructions += "\n\nContexto da empresa:\n" + "\n\n".join(context_parts)
         thread_id = f"tenant:{tenant_id}:conversation:{conversation_id}"
-        answer = _graph_response(llm.provider, llm.base_url, llm.model, api_key, instructions, history, thread_id)
+        answer = _graph_response(db, agent, conversation, instructions, history, thread_id)
         if not answer:
             return "provider_returned_empty_response"
-        answer = answer[:4000]
+        if len(answer) > 4000:
+            raise LLMError("Resposta excede limite de envio; contexto preservado", category="output_limit")
 
         # Confere novamente a revisão e a configuração imediatamente antes do efeito externo.
         db.expire_all()
@@ -302,6 +315,8 @@ def respond_to_conversation(self, tenant_id: str, conversation_id: str, expected
             or latest_llm.id != llm.id
             or latest_llm.updated_at != llm.updated_at
             or not latest_instance
+            or latest_instance.agent_id != latest_agent.id
+            or sending_denial(latest_instance, latest_conversation)
         ):
             return "stale_response_or_configuration_changed"
         if db.query(OutboxMessage).filter(
@@ -311,51 +326,13 @@ def respond_to_conversation(self, tenant_id: str, conversation_id: str, expected
         ).first():
             return "response_revision_already_dispatched"
 
-        outbox = OutboxMessage(
-            tenant_id=tenant_id,
-            instance_id=latest_instance.id,
-            conversation_id=conversation_id,
-            idempotency_key=secrets.token_urlsafe(24),
-            response_revision=expected_revision,
-            destination=latest_conversation.contact_key,
-            content=answer,
-            status="dispatching",
-            attempts=1,
-        )
-        db.add(outbox)
+        from app.outbox import enqueue
         try:
-            db.commit()
+            enqueue(db, latest_instance, latest_conversation, answer, revision=expected_revision)
         except IntegrityError:
             db.rollback()
             return "response_revision_already_dispatched"
-
-        try:
-            remote = ZapiClient(
-                latest_instance.instance_id,
-                decrypt_secret(latest_instance.token_encrypted) or "",
-                decrypt_secret(latest_instance.client_token_encrypted),
-            ).send_text(latest_conversation.contact_key, answer)
-        except (ZapiError, ValueError) as exc:
-            outbox.status = "failed"
-            outbox.last_error = (f"Z-API HTTP {exc.status_code or 'rede'}" if isinstance(exc, ZapiError) else str(exc))[:500]
-            db.commit()
-            logger.warning("Envio da resposta da conversa %s falhou (%s)", conversation_id, type(exc).__name__)
-            return "zapi_send_failed_no_automatic_retry"
-        remote_id = str(remote.get("messageId") or remote.get("zaapId") or remote.get("id") or "")[:180] or None
-        outbox.status = "accepted"
-        outbox.external_message_id = remote_id
-        db.add(Message(
-            tenant_id=tenant_id,
-            conversation_id=conversation_id,
-            external_id=remote_id,
-            direction="outgoing",
-            kind="text",
-            content=answer,
-            status="accepted",
-        ))
-        latest_conversation.last_message_at = datetime.now(timezone.utc)
-        db.commit()
-        return "reply_accepted_by_api"
+        return "reply_queued"
     except Retry:
         raise
     except LLMError as exc:
@@ -374,3 +351,57 @@ def respond_to_conversation(self, tenant_id: str, conversation_id: str, expected
                 pass
         redis_client.close()
         db.close()
+
+
+def _process_operational_event(db,event):
+    instance=db.query(ZapiInstance).filter(ZapiInstance.id==event.instance_id,ZapiInstance.tenant_id==event.tenant_id).first()
+    if not instance:
+        _finalize_event(db,event,error="instance_missing");return "instance_missing"
+    payload=event.payload
+    if event.event_type in {"ConnectedCallback","DisconnectedCallback"}:
+        instance.status="connected" if event.event_type=="ConnectedCallback" and _is_true(payload.get("connected")) else "disconnected"
+        if instance.status=="disconnected":instance.sending_enabled=False
+        _finalize_event(db,event);return "connection_updated"
+    if event.event_type not in {"DeliveryCallback","MessageStatusCallback"}:
+        _finalize_event(db,event,error="unsupported_callback");return "unsupported_callback"
+    if payload.get("status")=="READ_BY_ME":
+        _finalize_event(db,event);return "own_read_ignored"
+    ids=payload.get("ids") or [payload.get("messageId"),payload.get("id"),payload.get("zaapId")]
+    ids=[str(x) for x in ids if x]
+    rows=db.query(OutboxMessage).filter(OutboxMessage.tenant_id==event.tenant_id,OutboxMessage.instance_id==event.instance_id,OutboxMessage.external_message_id.in_(ids)).all()
+    if not rows:
+        event.processing_error="awaiting_message_correlation";db.commit();return "awaiting_correlation"
+    state="failed" if payload.get("error") else ({"SENT":"sent","RECEIVED":"delivered","READ":"read","PLAYED":"played"}.get(payload.get("status")) if event.event_type=="MessageStatusCallback" else "sent")
+    if state:
+        for row in rows:
+            row.status=advance_status(row.status,state)
+            if state=="failed":row.last_error="provider_delivery_error"
+            for message in db.query(Message).filter(Message.tenant_id==event.tenant_id,Message.conversation_id==row.conversation_id,Message.external_id==row.external_message_id,Message.direction=="outgoing").all():
+                message.status=advance_status(message.status,state)
+    _finalize_event(db,event);return "message_status_updated"
+
+
+@celery_app.task(name="app.tasks.dispatch_outbox")
+def dispatch_outbox(outbox_id):
+    from app.outbox import dispatch
+    return dispatch(outbox_id)
+
+
+@celery_app.task(name="app.tasks.recover_pending_work")
+def recover_pending_work():
+    db=SessionLocal()
+    try:
+        now=datetime.now(timezone.utc)
+        # A worker can disappear after an external send; never re-send that ambiguous record.
+        db.query(OutboxMessage).filter(OutboxMessage.status=="dispatching",OutboxMessage.updated_at<now-timedelta(minutes=2)).update({OutboxMessage.status:"unknown",OutboxMessage.last_error:"worker_lost_during_dispatch"},synchronize_session=False)
+        db.commit()
+        events=db.query(WebhookEvent).filter(WebhookEvent.processed.is_(False),WebhookEvent.attempts<10,(WebhookEvent.last_attempt_at.is_(None))|(WebhookEvent.last_attempt_at<now-timedelta(minutes=2))).order_by(WebhookEvent.received_at).limit(100).all()
+        for event in events:process_webhook_event.delay(event.id)
+        pending=db.query(OutboxMessage).filter(OutboxMessage.status.in_(["pending","retry_wait"]),(OutboxMessage.next_attempt_at.is_(None))|(OutboxMessage.next_attempt_at<=now)).order_by(OutboxMessage.created_at).limit(100).all()
+        for row in pending:dispatch_outbox.delay(row.id)
+        conversations=db.query(Conversation).join(ZapiInstance,Conversation.instance_id==ZapiInstance.id).filter(Conversation.status=="open",Conversation.opted_out.is_(False),Conversation.response_attempts<3,Conversation.last_incoming_at>=now-timedelta(hours=24),ZapiInstance.agent_id.isnot(None),ZapiInstance.sending_enabled.is_(True)).limit(100).all()
+        for row in conversations:
+            if not db.query(OutboxMessage).filter(OutboxMessage.tenant_id==row.tenant_id,OutboxMessage.conversation_id==row.id,OutboxMessage.response_revision==row.revision).first():
+                respond_to_conversation.delay(row.tenant_id,row.id,row.revision)
+        return {"events":len(events),"outbox":len(pending)}
+    finally:db.close()

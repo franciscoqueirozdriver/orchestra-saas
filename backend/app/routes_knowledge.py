@@ -102,7 +102,7 @@ async def upload_document(
         raise HTTPException(status_code=422, detail="Não foi possível ler o documento") from exc
     if not chunks:
         raise HTTPException(status_code=422, detail="Documento sem texto extraível")
-    llm = db.query(LLMConfig).filter(LLMConfig.tenant_id == tenant_id).first()
+    llm = db.query(LLMConfig).filter(LLMConfig.tenant_id == tenant_id, LLMConfig.is_default.is_(True)).first()
     if llm is None:
         raise HTTPException(status_code=409, detail="Configure um provedor de embeddings antes de indexar documentos")
     embedding_key = decrypt_secret(llm.embedding_api_key_encrypted) or decrypt_secret(llm.api_key_encrypted)

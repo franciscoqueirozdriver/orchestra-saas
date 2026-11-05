@@ -4,6 +4,9 @@ from typing import Any
 
 
 def event_key(payload: dict[str, Any]) -> str:
+    if payload.get("type") == "MessageStatusCallback":
+        canonical = json.dumps({"ids": sorted(str(x) for x in payload.get("ids", [])), "status": payload.get("status"), "type": payload.get("type")}, sort_keys=True)
+        return sha256(canonical.encode()).hexdigest()
     message_id = payload.get("messageId") or payload.get("zaapId") or payload.get("id")
     if message_id:
         return str(message_id)[:220]
@@ -34,7 +37,7 @@ def from_me(payload: dict[str, Any]) -> bool:
 
 def contact_key(payload: dict[str, Any]) -> str:
     # Preserva LID/identificadores originais quando presentes; sempre vinculado à instância.
-    return str(payload.get("senderLid") or payload.get("phone") or payload.get("participantLid") or payload.get("participantPhone") or "")[:180]
+    return str(payload.get("chatLid") or payload.get("senderLid") or payload.get("phone") or payload.get("participantLid") or payload.get("participantPhone") or "")[:180]
 
 
 def contact_name(payload: dict[str, Any]) -> str:
