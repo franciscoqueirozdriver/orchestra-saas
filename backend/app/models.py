@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 import uuid
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, func, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, ForeignKeyConstraint, Index, Integer, JSON, String, Text, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -46,6 +46,7 @@ class Agent(Base):
     description: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     llm_config_id: Mapped[str | None] = mapped_column(ForeignKey("llm_configs.id", ondelete="SET NULL"), index=True)
     fallback_config_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
+    conversation_profile: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
     system_prompt: Mapped[str] = mapped_column(Text, nullable=False, default="")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     auto_reply_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -99,7 +100,7 @@ class LLMConfig(Base):
 
 class Conversation(Base):
     __tablename__ = "conversations"
-    __table_args__ = (UniqueConstraint("tenant_id", "instance_id", "contact_key", name="uq_conversation_contact"),)
+    __table_args__ = (UniqueConstraint("tenant_id", "instance_id", "contact_key", name="uq_conversation_contact"), UniqueConstraint("id","tenant_id",name="uq_conversation_id_tenant"))
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     instance_id: Mapped[str] = mapped_column(ForeignKey("zapi_instances.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -110,6 +111,10 @@ class Conversation(Base):
     consent_status: Mapped[str] = mapped_column(String(16), nullable=False, default="unknown", server_default="unknown")
     consent_evidence: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     last_incoming_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    turn_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    context_state: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    context_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    pause_reason: Mapped[str | None] = mapped_column(String(40))
     response_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
@@ -122,6 +127,8 @@ class Message(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True)
+    author_kind: Mapped[str] = mapped_column(String(16), nullable=False, default='legacy', server_default='legacy')
+    operator_id: Mapped[str | None] = mapped_column(ForeignKey('users.id', ondelete='SET NULL'))
     external_id: Mapped[str | None] = mapped_column(String(180), index=True)
     direction: Mapped[str] = mapped_column(String(16), nullable=False)
     kind: Mapped[str] = mapped_column(String(40), nullable=False, default="text")
@@ -173,6 +180,7 @@ class MemoryItem(Base):
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     contact_key: Mapped[str] = mapped_column(String(180), nullable=False, index=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    approved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default='false')
     source: Mapped[str] = mapped_column(String(80), nullable=False, default="operator")
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -181,6 +189,7 @@ class MemoryItem(Base):
 class OutboxMessage(Base):
     __tablename__ = "outbox_messages"
     __table_args__ = (
+        UniqueConstraint("id", "tenant_id", name="uq_outbox_id_tenant"),
         UniqueConstraint("idempotency_key", name="uq_outbox_idempotency_key"),
         UniqueConstraint("tenant_id", "conversation_id", "response_revision", name="uq_outbox_conversation_revision"),
         Index("ix_outbox_tenant_status_created", "tenant_id", "status", "created_at"),
@@ -191,6 +200,9 @@ class OutboxMessage(Base):
     conversation_id: Mapped[str | None] = mapped_column(ForeignKey("conversations.id", ondelete="SET NULL"), index=True)
     idempotency_key: Mapped[str] = mapped_column(String(80), nullable=False)
     response_revision: Mapped[int | None] = mapped_column(Integer)
+    delivery_config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    author_kind: Mapped[str] = mapped_column(String(16), nullable=False, default='assistant', server_default='assistant')
+    operator_id: Mapped[str | None] = mapped_column(ForeignKey('users.id', ondelete='SET NULL'))
     destination: Mapped[str] = mapped_column(String(180), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
@@ -217,3 +229,44 @@ class ModelRun(Base):
     selected_config_id: Mapped[str | None] = mapped_column(String(36))
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="running")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ConversationTurn(Base):
+    __tablename__ = 'conversation_turns'
+    __table_args__ = (UniqueConstraint('tenant_id','conversation_id','revision',name='uq_turn_revision'), ForeignKeyConstraint(['conversation_id','tenant_id'],['conversations.id','conversations.tenant_id'],ondelete='CASCADE'))
+    id: Mapped[str] = mapped_column(String(36),primary_key=True,default=new_id)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey('tenants.id',ondelete='CASCADE'),nullable=False,index=True)
+    conversation_id: Mapped[str] = mapped_column(ForeignKey('conversations.id',ondelete='CASCADE'),nullable=False,index=True)
+    revision: Mapped[int] = mapped_column(Integer,nullable=False)
+    message_ids: Mapped[list] = mapped_column(JSON,nullable=False)
+    state: Mapped[dict] = mapped_column(JSON,nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),server_default=func.now())
+
+
+class ConversationAction(Base):
+    __tablename__ = 'conversation_actions'
+    __table_args__ = (ForeignKeyConstraint(['conversation_id','tenant_id'],['conversations.id','conversations.tenant_id'],ondelete='CASCADE'),)
+    id: Mapped[str] = mapped_column(String(36),primary_key=True,default=new_id)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey('tenants.id',ondelete='CASCADE'),nullable=False,index=True)
+    conversation_id: Mapped[str] = mapped_column(ForeignKey('conversations.id',ondelete='CASCADE'),nullable=False,index=True)
+    operator_id: Mapped[str | None] = mapped_column(ForeignKey('users.id',ondelete='SET NULL'))
+    action: Mapped[str] = mapped_column(String(40),nullable=False)
+    revision: Mapped[int] = mapped_column(Integer,nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),server_default=func.now())
+
+
+class OutboxPart(Base):
+    __tablename__ = 'outbox_parts'
+    __table_args__ = (
+        UniqueConstraint('tenant_id','outbox_id','ordinal',name='uq_outbox_part_ordinal'),
+        ForeignKeyConstraint(['outbox_id','tenant_id'],['outbox_messages.id','outbox_messages.tenant_id'],ondelete='CASCADE'),
+    )
+    id: Mapped[str] = mapped_column(String(36),primary_key=True,default=new_id)
+    tenant_id: Mapped[str] = mapped_column(String(36),nullable=False,index=True)
+    outbox_id: Mapped[str] = mapped_column(String(36),nullable=False,index=True)
+    ordinal: Mapped[int] = mapped_column(Integer,nullable=False)
+    content: Mapped[str] = mapped_column(Text,nullable=False)
+    status: Mapped[str] = mapped_column(String(32),nullable=False,default='pending')
+    external_message_id: Mapped[str | None] = mapped_column(String(180),index=True)
+    attempts: Mapped[int] = mapped_column(Integer,nullable=False,default=0,server_default='0')
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),server_default=func.now(),onupdate=func.now())
