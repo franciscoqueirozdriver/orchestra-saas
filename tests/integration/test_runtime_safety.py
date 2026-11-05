@@ -890,3 +890,50 @@ def test_storage_downgrade_refuses_saved_text(runtime):
     with runtime.db() as db:
         assert db.execute(text('SELECT version_num FROM alembic_version')).scalar()=='0006_knowledge_storage'
         assert db.query(KnowledgeDocument).one().extracted_text=='Synthetic retained text'
+    subprocess.run([sys.executable,'-m','alembic','upgrade','head'],cwd=ROOT/'backend',env=env,capture_output=True,check=True)
+
+
+def test_search_reuses_connection_key_and_rotation_without_copy(runtime):
+    from app.routes_knowledge import save_search_settings,get_search_settings
+    from app.routes_llm import delete_connection
+    from app.embedding_config import knowledge_embedding_config
+    from app.models import LLMConfig,KnowledgeSearchConfig
+    from app.schemas import KnowledgeSearchUpsert
+    from app.security import encrypt_secret
+    from fastapi import HTTPException
+    with runtime.db() as db:
+        connection=db.get(LLMConfig,'model-a');connection.provider='gemini';connection.protocol='gemini';connection.base_url='https://generativelanguage.googleapis.com/v1beta';db.commit()
+        payload=KnowledgeSearchUpsert(connection_id='model-a',model='gemini-embedding-001')
+        result=save_search_settings(payload,db,'tenant-a',runtime.admin)
+        assert result['source']=='connection' and result['connection_id']=='model-a'
+        assert 'test-only-model-key' not in str(result)
+        stored=db.get(KnowledgeSearchConfig,'tenant-a')
+        assert stored.embedding_api_key_encrypted==''
+        assert knowledge_embedding_config(db,'tenant-a')==('https://generativelanguage.googleapis.com/v1beta/openai','gemini-embedding-001','test-only-model-key')
+        connection.api_key_encrypted=encrypt_secret('rotated-synthetic-key');db.commit()
+        assert knowledge_embedding_config(db,'tenant-a')[2]=='rotated-synthetic-key'
+        with pytest.raises(HTTPException) as exc:delete_connection('model-a',db,'tenant-a',runtime.admin)
+        assert exc.value.status_code==409
+        with pytest.raises(HTTPException) as exc:save_search_settings(payload,db,'tenant-b',runtime.admin)
+        assert exc.value.status_code==422
+        connection.base_url='https://different.invalid/v1beta';db.commit()
+        assert not get_search_settings(db,'tenant-a')['configured']
+        assert get_search_settings(db,'tenant-a')['connection_id']=='model-a'
+
+
+def test_search_connection_invalid_state_and_downgrade_guard(runtime):
+    from app.routes_knowledge import save_search_settings
+    from app.models import LLMConfig
+    from app.schemas import KnowledgeSearchUpsert
+    from fastapi import HTTPException
+    with runtime.db() as db:
+        row=db.get(LLMConfig,'model-a');row.enabled=False;db.commit()
+        payload=KnowledgeSearchUpsert(connection_id='model-a',model='synthetic')
+        with pytest.raises(HTTPException) as exc:save_search_settings(payload,db,'tenant-a',runtime.admin)
+        assert exc.value.status_code==422
+        row.enabled=True;db.commit()
+        save_search_settings(payload,db,'tenant-a',runtime.admin)
+    env=dict(os.environ,DATABASE_URL=URL,PYTHONPATH=str(ROOT/'backend'))
+    result=subprocess.run([sys.executable,'-m','alembic','downgrade','0006_knowledge_storage'],cwd=ROOT/'backend',env=env,capture_output=True,text=True)
+    assert result.returncode!=0 and 'Downgrade recusado' in result.stderr
+    with runtime.db() as db:assert db.execute(text('SELECT version_num FROM alembic_version')).scalar()=='0007_search_connection'

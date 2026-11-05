@@ -35,3 +35,31 @@ imagens anteriores com schema aditivo preservado; não reverta o banco cegamente
 Conteúdo de documentos e chaves são dados privados. A publicação leva apenas
 código, migration e documentação. Testes usam documentos sintéticos e transporte
 simulado; disponibilidade, credenciais e modelos reais exigem homologação.
+
+## Reaproveitar conexão cadastrada
+
+Em Configurar busca, escolha uma conexão da empresa e informe o **modelo de
+embeddings**. URL e chave manuais ficam ocultas. A API guarda apenas o vínculo,
+a URL derivada e o modelo; não duplica a chave. A credencial atual da geração é
+lida da conexão selecionada somente no servidor, inclusive após rotação.
+A chave de embeddings legada da conexão não é usada silenciosamente nesse modo.
+Configuração manual continua disponível para credenciais independentes.
+
+Gemini sugere `gemini-embedding-001` e deriva `/v1beta/openai` da URL nativa.
+As requisições ao endpoint oficial Google pedem 1536 dimensões e os vetores são
+normalizados. O nome do modelo de conversa não é usado para indexar documentos.
+Outros fornecedores precisam oferecer embeddings compatíveis; selecionar uma
+conexão não confirma modelo, quota ou disponibilidade real.
+
+A conexão não pode ser excluída enquanto estiver vinculada à busca. Desativação
+ou mudança de endpoint faz a busca recusar o uso até revisão; não encaminha uma
+chave automaticamente para um novo destino. Mudança de espaço vetorial com
+índices existentes continua bloqueada. Isso não implementa fallback entre
+modelos de embeddings diferentes.
+
+A revisão aditiva `0007_search_connection` não altera configurações existentes.
+Seu downgrade recusa referências ativas. **Reversão para código anterior após
+criar vínculos exige antes restaurar uma configuração manual equivalente**, com
+credencial cifrada, revisão/backup e autorização, ou publicar correção à frente.
+O código anterior não sabe resolver a referência; apenas voltar a imagem não
+mantém a busca vinculada funcionando. Não executar downgrade automático.

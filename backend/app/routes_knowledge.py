@@ -12,9 +12,9 @@ from app.config import settings
 from app.database import get_db
 from app.dependencies import get_current_user, get_tenant_id
 from app.embedding_client import embed_texts
-from app.embedding_config import knowledge_embedding_config
+from app.embedding_config import knowledge_embedding_config, connection_embedding_config
 from app.llm_client import LLMError
-from app.models import KnowledgeChunk, KnowledgeDocument, KnowledgeSearchConfig, User
+from app.models import KnowledgeChunk, KnowledgeDocument, KnowledgeSearchConfig, LLMConfig, User
 from app.control import serialized_mutation
 from app.security import encrypt_secret
 from app.schemas import KnowledgeSearchUpsert
@@ -117,11 +117,14 @@ async def upload_document(
 @router.get("/search-settings")
 def get_search_settings(db: Session = Depends(get_db), tenant_id: str = Depends(get_tenant_id)):
     row=db.get(KnowledgeSearchConfig,tenant_id)
+    result={"configured":False,"source":"none","connection_id":row.connection_id if row else None,
+            "base_url":row.embedding_base_url if row else "","model":row.embedding_model if row else "","dimensions":1536}
     try:
         base,model,_=knowledge_embedding_config(db,tenant_id)
-        return {"configured":True,"source":"dedicated" if row else "legacy", "base_url":base,"model":model,"dimensions":1536}
-    except LLMError:
-        return {"configured":False,"source":"none","base_url":"","model":"","dimensions":1536}
+        result.update(configured=True,source=('connection' if row.connection_id else 'dedicated') if row else 'legacy',base_url=base,model=model)
+    except LLMError as exc:
+        result['configuration_error']=str(exc)
+    return result
 
 
 @router.put("/search-settings")
@@ -130,18 +133,30 @@ def save_search_settings(payload: KnowledgeSearchUpsert, db: Session = Depends(g
                          tenant_id: str = Depends(get_tenant_id), user: User = Depends(get_current_user)):
     _require_admin(user)
     row=db.get(KnowledgeSearchConfig,tenant_id)
+    selected=None
+    requested_base=payload.base_url
+    if payload.connection_id:
+        selected=db.query(LLMConfig).filter_by(id=payload.connection_id,tenant_id=tenant_id).first()
+        if selected is None:raise HTTPException(422,'Conexão não encontrada nesta empresa')
+        if payload.api_key or payload.base_url:raise HTTPException(422,'Ao selecionar conexão, não envie URL ou chave manual')
+        try:requested_base,_=connection_embedding_config(selected)
+        except LLMError as exc:raise HTTPException(422,str(exc)) from exc
+    elif not requested_base:raise HTTPException(422,'Informe uma conexão cadastrada ou a URL da busca')
     try:
         base,model,_=knowledge_embedding_config(db,tenant_id)
     except LLMError:
-        base=model=None
-    if (base,model)!=(payload.base_url,payload.model) and db.query(KnowledgeDocument).filter_by(tenant_id=tenant_id,status='indexed').first():
+        # Preserve the indexed namespace even when credentials are unavailable.
+        base,model=(row.embedding_base_url,row.embedding_model) if row else (None,None)
+    if (base,model)!=(requested_base,payload.model) and db.query(KnowledgeDocument).filter_by(tenant_id=tenant_id,status='indexed').first():
         raise HTTPException(409,'Há documentos indexados: alterar a busca exige reindexação planejada')
-    if not payload.api_key and (row is None or row.embedding_base_url!=payload.base_url):
+    if selected is None and not payload.api_key and (row is None or row.connection_id or row.embedding_base_url!=requested_base):
         raise HTTPException(422,'Informe a chave da busca ao configurar ou alterar o endpoint')
     if row is None:
         row=KnowledgeSearchConfig(tenant_id=tenant_id);db.add(row)
-    row.embedding_base_url=payload.base_url;row.embedding_model=payload.model
-    if payload.api_key:row.embedding_api_key_encrypted=encrypt_secret(payload.api_key)
+    row.embedding_base_url=requested_base;row.embedding_model=payload.model
+    row.connection_id=selected.id if selected else None
+    if selected:row.embedding_api_key_encrypted=''
+    elif payload.api_key:row.embedding_api_key_encrypted=encrypt_secret(payload.api_key)
     db.commit()
     return get_search_settings(db,tenant_id)
 

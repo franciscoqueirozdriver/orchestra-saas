@@ -176,14 +176,15 @@ class ConversationSendRequest(ConversationActionRequest):
 
 
 class KnowledgeSearchUpsert(BaseModel):
-    base_url: str = Field(max_length=500)
+    connection_id: str | None = Field(default=None,max_length=36)
+    base_url: str | None = Field(default=None,max_length=500)
     model: str = Field(min_length=1,max_length=160)
     api_key: str | None = Field(default=None,max_length=1000)
 
     @field_validator('base_url')
     @classmethod
     def validate_base(cls,value):
-        return _validate_https_base(value)
+        return _validate_https_base(value) if value else None
 
     @field_validator('model')
     @classmethod

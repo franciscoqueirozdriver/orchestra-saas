@@ -1,4 +1,6 @@
 import httpx
+import math
+from urllib.parse import urlparse
 
 from app.config import settings
 from app.llm_client import LLMError
@@ -16,11 +18,14 @@ def embed_texts(base_url: str, model: str, api_key: str, texts: list[str]) -> li
         validate_public_https(base_url)
     except UnsafeExternalURL as exc:
         raise LLMError(str(exc)) from exc
+    payload={"model":model,"input":texts}
+    if urlparse(base_url).hostname=="generativelanguage.googleapis.com":
+        payload["dimensions"]=1536
     try:
         response = httpx.post(
             base_url.rstrip("/") + "/embeddings",
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={"model": model, "input": texts},
+            json=payload,
             timeout=httpx.Timeout(settings.llm_request_timeout_seconds, connect=8.0),
             follow_redirects=False,
         )
@@ -35,4 +40,14 @@ def embed_texts(base_url: str, model: str, api_key: str, texts: list[str]) -> li
         raise LLMError("Resposta inválida do endpoint embeddings") from exc
     if len(vectors) != len(texts) or any(not isinstance(vector, list) or len(vector) != 1536 for vector in vectors):
         raise LLMError("O modelo de embeddings precisa retornar 1536 dimensões por trecho")
-    return [[float(value) for value in vector] for vector in vectors]
+    try:
+        result=[[float(value) for value in vector] for vector in vectors]
+        if any(not math.isfinite(value) for vector in result for value in vector):raise ValueError()
+    except (ValueError,TypeError,OverflowError) as exc:
+        raise LLMError("Embeddings contêm valores inválidos") from exc
+    if urlparse(base_url).hostname=="generativelanguage.googleapis.com":
+        for vector in result:
+            norm=math.sqrt(sum(value*value for value in vector))
+            if not math.isfinite(norm) or norm==0:raise LLMError("Embedding Gemini inválido")
+            vector[:]=[value/norm for value in vector]
+    return result
