@@ -53,3 +53,15 @@ jobs:
           ORCHESTRA_BASELINE_ROOT: ${{ runner.temp }}/orchestra-baseline
           MEDIA_DIR: /tmp/orchestra-test-media
         run: pytest -q tests/integration
+
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Synthetic browser driver
+        run: npm install --prefix "$RUNNER_TEMP/orchestra-ui" --no-audit --no-fund playwright-core@1.56.1
+      - name: Conversation panel against synthetic API only
+        run: NODE_PATH="$RUNNER_TEMP/orchestra-ui/node_modules" node tests/ui/conversation-panel.cjs

@@ -35,7 +35,13 @@ def validate_target(root, commit):
 
 def image_inventory(root):
     result = {}
+    # Old deployments have no scheduler service; querying it directly exits nonzero.
+    declared=set(run(root,'docker','compose','config','--services').splitlines())
     for service in ('api', 'worker', 'web', 'db', 'redis', 'scheduler'):
+        if service not in declared:
+            if service=='scheduler':
+                continue
+            raise RuntimeError('Serviço ausente no Compose: '+service)
         container = run(root, 'docker', 'compose', 'ps', '-q', service)
         if not container and service == 'scheduler':
             continue

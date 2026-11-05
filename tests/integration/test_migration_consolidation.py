@@ -64,7 +64,7 @@ def seed(engine):
 def test_frozen_initial_and_legacy_upgrade_preserve_schema_and_synthetic_data():
     parsed = make_url(URL)
     assert parsed.database == 'orchestra_consolidation_test'
-    assert parsed.host in {'orchestra-consolidation-test-db-20261105', '127.0.0.1'}
+    assert parsed.host in {'orchestra-consolidation-test-db-20261105', 'orchestra-natural-test-db-20261105', '127.0.0.1'}
     engine = create_engine(URL)
     baseline = Path(BASELINE)
     try:
@@ -76,7 +76,7 @@ def test_frozen_initial_and_legacy_upgrade_preserve_schema_and_synthetic_data():
         alembic(ROOT, 'upgrade', 'head')
         upgraded = shape(engine)
         with engine.connect() as c:
-            assert c.scalar(text('SELECT version_num FROM alembic_version')) == '0004_model_run_uniqueness'
+            assert c.scalar(text('SELECT version_num FROM alembic_version')) == '0005_conversation_core'
             assert c.scalar(text("SELECT count(*) FROM messages WHERE content='synthetic only'")) == 1
             assert c.scalar(text("SELECT last_incoming_at IS NOT NULL FROM conversations WHERE id='conversation-a'"))
             assert c.scalar(text("SELECT is_default FROM llm_configs WHERE id='llm-a'"))
@@ -88,7 +88,7 @@ def test_frozen_initial_and_legacy_upgrade_preserve_schema_and_synthetic_data():
         failed = alembic(ROOT, 'downgrade', '0002_delivery_controls', success=False)
         assert 'Downgrade recusado' in failed.stderr
         with engine.begin() as c:
-            assert c.scalar(text('SELECT version_num FROM alembic_version')) == '0004_model_run_uniqueness'
+            assert c.scalar(text('SELECT version_num FROM alembic_version')) == '0005_conversation_core'
             assert c.scalar(text('SELECT count(*) FROM llm_configs')) == 2
             c.execute(text("DELETE FROM llm_configs WHERE id='llm-b'"))
         alembic(ROOT, 'downgrade', '0001_initial')

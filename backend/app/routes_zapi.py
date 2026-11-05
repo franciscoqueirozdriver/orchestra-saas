@@ -125,7 +125,7 @@ def send_text(internal_id: str, payload: SendTextRequest, db: DbSession, tenant_
     if denial: raise HTTPException(409, detail=denial)
     try:
         conversation.status = "human"
-        outbox = enqueue(db, row, conversation, payload.message, idempotency_key=payload.idempotency_key)
+        outbox = enqueue(db, row, conversation, payload.message, idempotency_key=payload.idempotency_key,author_kind='operator',operator_id=user.id)
     except ValueError as exc: raise HTTPException(409, detail=str(exc)) from exc
     return {"outbox_id":outbox.id,"status":outbox.status}
 
