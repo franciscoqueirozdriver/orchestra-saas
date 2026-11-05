@@ -1,6 +1,6 @@
 # Plano para aprovação — atendimento natural no Orquestra
 
-Status: proposta, implementação ainda não autorizada por este documento.
+Status: E0–E5 aprovados pelo usuário em branch separada para testes. Merge/deploy não autorizados.
 Preparado em 05/11/2026, sobre a linha local 328e2b0, que contém a integração f3a8140
 mais a ingestão privada. Não altera a aplicação, schema, serviços ou fornecedores.
 
@@ -188,4 +188,4 @@ acervo. WaMe, MCP e demais etapas posteriores serão propostas separadamente.
 
 Na execução, a primeira devolutiva será a matriz de E0 com decisões de reaproveitamento,
 riscos encontrados e confirmação da estimativa; depois seguem os blocos na ordem
-aprovada. Esta entrega é somente o planejamento para sua decisão.
+aprovada. Progresso e limites da execução em docs/consolidacao/2026-11-05-nucleo-mesa.md.
