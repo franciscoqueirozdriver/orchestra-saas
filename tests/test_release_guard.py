@@ -94,3 +94,23 @@ def test_deploy_pauses_outbound_unless_pilot_explicitly_allowed(tmp_path, allow,
                                      ORCHESTRA_ALLOW_OUTBOUND_DEPLOY=allow, DOCKER_TEST_MARKER=str(marker)))
     assert result.returncode != 0  # Fake Docker intentionally stops before all effects.
     assert marker.read_text() == expected
+
+
+def test_inventory_supports_old_compose_without_scheduler(tmp_path,monkeypatch):
+    calls=[]
+    def fake_run(root,*args):
+        calls.append(args)
+        if args==('docker','compose','config','--services'):return 'api\nworker\nweb\ndb\nredis'
+        if args[:4]==('docker','compose','ps','-q'):return 'container-'+args[-1]
+        if args[:2]==('docker','inspect'):return 'synthetic-image-id'
+        raise AssertionError('Unexpected command')
+    monkeypatch.setattr(release,'run',fake_run)
+    inventory=release.image_inventory(tmp_path)
+    assert set(inventory)=={'api','worker','web','db','redis'}
+    assert not any('scheduler' in args for args in calls)
+
+
+def test_inventory_still_requires_existing_application_services(tmp_path,monkeypatch):
+    monkeypatch.setattr(release,'run',lambda root,*args:'api\nweb\ndb\nredis' if args[-1]=='--services' else 'synthetic-container-or-image')
+    with pytest.raises(RuntimeError,match='worker'):
+        release.image_inventory(tmp_path)

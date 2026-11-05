@@ -117,3 +117,15 @@ Pendências externas à validação técnica: revisão humana de naturalidade, c
 com modelo real, latência/carga representativa, operação de unknown, homologação de
 Z-API/presença e piloto autorizado. Áudio online, ferramentas, WaMe, MCP e publicação
 do acervo permanecem fora desta branch de execução.
+
+## Preparação da primeira publicação autorizada
+
+Após autorização do usuário para publicar, o primeiro acesso SSH foi recusado pelo
+agente local (assinatura da chave indisponível). Nenhuma alteração remota ou merge
+foi executado nessa tentativa. É necessário desbloquear a chave no terminal local,
+sem compartilhar passphrase em chat.
+
+A conferência do helper detectou incompatibilidade com Compose legado sem scheduler:
+consulta direta a serviço inexistente pode falhar antes da verificação opcional.
+Corrigido inventário para consultar primeiro os nomes declarados; ausência de serviço
+obrigatório continua sendo recusada. Dois testes sintéticos cobrem esse bootstrap.
