@@ -25,3 +25,16 @@ TODO.md
 *.zip
 *.tar.gz
 .DS_Store
+
+# Material privado bruto (texto e mídia), mesmo se a exclusão geral de docs mudar.
+/docs/Conversas/
+
+# Nested caches and credentials must also stay out of backend COPY.
+**/__pycache__
+**/*.py[cod]
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.dump
+**/*.enc

@@ -18,4 +18,4 @@ backups/
 .DS_Store
 
 # Exportações locais de conversas e mídias; não são código nem fixtures públicas.
-docs/Conversas/
+/docs/Conversas/
