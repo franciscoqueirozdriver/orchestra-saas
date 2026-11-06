@@ -105,10 +105,18 @@ Depois de publicada a versão com migration 0008 e concluída a importação, ab
 **Conversas**, escolha a conversa e consulte a linha do tempo. Mensagens históricas
 de cliente/equipe também podem compor o contexto recente quando aquele contato voltar.
 
-O commit `db66dde71dd4c85304632e65a3d9c8849599670f` foi validado por CI, mas está
-na PR #7 até integração. O pacote privado exportado tem 7.934 mensagens em 58
-conversas, após deduplicar cópias idênticas pelo hash. Ainda não o transporte nem
-importe até a migration estar publicada. Não indexe automaticamente o corpus na
+O código está no SHA `1dbd44a7e903b8fd6529dc78e53b4a548d6baea8`, integrado à
+`main` pela PR #7 (funcionalidade) e PR #8 (correção de data ausente), com CI
+aprovado. O mesmo SHA está publicado na VPS, com banco em
+`0008_historical_conversations`. O histórico foi importado para a empresa Climatiza
+Brasil: 7.934 mensagens de 59 fontes deduplicadas por arquivo, em 58 conversas.
+
+Para localizar as mensagens, acesse `https://app.salex.tech`, entre na empresa
+Climatiza Brasil e abra **Conversas**. Selecione uma pessoa para ver sua linha do
+tempo, autores, datas e a marca **Histórico**. A importação não chamou provedores
+externos. Quando o contato enviar uma nova mensagem, as mensagens históricas
+recentes incluídas no limite do agente passam a integrar o contexto enviado ao
+provedor configurado para gerar resposta. Não indexe automaticamente o corpus na
 base de conhecimento: o histórico é conversa e contexto, não regra comercial
 aprovada. Veja [`docs/historico-whatsapp.md`](historico-whatsapp.md),
 [`docs/conhecimento/preparacao-privada.md`](conhecimento/preparacao-privada.md) e o
