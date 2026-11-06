@@ -1,6 +1,10 @@
 # Passo a passo — criar e configurar a VPS Hostinger
 
-**Atualizado em 30/10/2026.** O roteiro assume que você já contratou o plano KVM 2 e quer hospedar o MVP Orquestra. Os nomes dos botões do hPanel podem variar ligeiramente.
+**Atualizado em 06/11/2026.** Este roteiro cobre o provisionamento inicial da VPS KVM 2.
+A VPS ativa já foi provisionada e publicada; para o estado operacional atual e a
+rotina de release, consulte [fluxo local/GitHub/VPS](fluxo-local-github-vps.md) e o
+[handoff de 06/11](handoff/2026-11-06-publicacao-e-ingestao.md). Não repita passos de
+provisionamento em uma VPS existente.
 
 ## Testes locais opcionais
 

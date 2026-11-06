@@ -1,6 +1,8 @@
 # Preparar conhecimento a partir de conversas privadas
 
-Status: processo proposto, sem importação, transcrição, OCR ou envio a IA.
+Status em 06/11/2026: ingestão textual e transcrição local concluídas para a amostra
+integral então inventariada. Nenhum conteúdo foi enviado a provedor de IA, à VPS ou
+à base de conhecimento da aplicação.
 As fontes em `/docs/Conversas/` são materiais privados locais, com textos e mídias.
 Não são automaticamente uma base de conhecimento nem instruções para agentes.
 
@@ -83,13 +85,17 @@ administrativa, não aos documentos.
 
 ## Estado atual
 
-A responsável autorizou o processamento local integral e definiu uso duplo: histórico
-por contato e exemplos para conhecimento geral de atendimento. A transcrição local
-está em andamento. A separação, a revisão de privacidade e a futura associação de cada
-histórico ao identificador recebido pelo WhatsApp continuam necessárias.
+O staging local foi processado para dois usos separados: reconstruir histórico por
+autor/conversa e preparar exemplos gerais de atendimento. A transcrição de fala foi
+local; seis vídeos não tinham faixa de áudio, e centenas de segmentos requerem revisão.
+A cópia de exemplos é rascunho privado com redação automática, não um conjunto já
+aprovado para busca. Revisão de privacidade, atualidade factual e qualidade continua
+necessária. Histórico por contato ainda não foi associado ao identificador da
+integração WhatsApp.
 
-Não há importação para produção nem envio a embeddings nesta etapa. A API atual de
-upload chama um provedor externo; não usá-la para conversas brutas ou candidatos
-pendentes. Também não usar os arquivos privados como prompts de teste, logs, anexos
-de PR ou conteúdo de imagens Docker. Ver [uso duplo das conversas](uso-duplo-conversas.md)
-e [ingestão local](ingestao-local-whatsapp.md).
+Não houve importação para produção nem envio a embeddings. A API atual de upload chama
+um provedor externo; não usá-la para conversas brutas ou candidatos pendentes. Não
+usar arquivos privados como prompts de teste, logs, anexos de PR ou conteúdo de imagens
+Docker. Veja [uso duplo das conversas](uso-duplo-conversas.md),
+[ingestão local](ingestao-local-whatsapp.md) e o
+[handoff detalhado](../handoff/2026-11-06-publicacao-e-ingestao.md).

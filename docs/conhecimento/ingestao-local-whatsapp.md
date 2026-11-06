@@ -177,8 +177,9 @@ isolamento por empresa, aprovação e destinos privados. Smoke real da amostra n
 
 Na validação atual, **19 testes locais passaram**, com fixtures sintéticas;
 `git diff --check` também passou. Isso não mede a qualidade semântica das transcrições.
-Os dados persistentes ficam em /home/Alessandra/Documentos/orchestra-private/ingestao-amostra-20261105:
-sample-v2.sqlite é o banco válido; a reconstrução integral e a cópia de aprendizado
-mais recentes ficam em final-20261106, fora do repositório e com acesso restrito.
-Tentativas
-anteriores permanecem separadas para auditoria, não devem ser usadas como versão final.
+Os resultados persistentes ficam em diretório privado fora do repositório. O SQLite
+de staging é a fonte de proveniência; a reconstrução integral e a cópia de aprendizado
+mais recentes foram geradas no processamento de 06/11. Backups de estágio e resultados
+anteriores permanecem separados para auditoria e não devem substituir a versão atual.
+O [handoff](../handoff/2026-11-06-publicacao-e-ingestao.md) registra contagens,
+limitações, publicação e próximos passos.
