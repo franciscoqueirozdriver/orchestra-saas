@@ -1,5 +1,6 @@
 """Private offline WhatsApp staging. No application database, HTTP, embeddings or publish path."""
 import argparse
+import csv
 import hashlib
 import fcntl
 import json
@@ -10,6 +11,7 @@ import sqlite3
 import subprocess
 import tempfile
 import time
+import unicodedata
 from datetime import datetime, timezone
 
 VERSION = 'whatsapp-local-v1'
@@ -42,7 +44,197 @@ def connect(path):
     db.row_factory = sqlite3.Row
     db.execute('PRAGMA foreign_keys=ON')
     db.executescript((Path(__file__).parent / 'migrations/0001_private.sql').read_text())
+    version = db.execute('SELECT max(version) FROM schema_version').fetchone()[0] or 1
+    if version < 2:
+        db.executescript((Path(__file__).parent / 'migrations/0002_conversation_authors.sql').read_text())
+        db.execute('INSERT OR IGNORE INTO schema_version VALUES(2)')
+        db.commit()
+        version = 2
+    if version < 3:
+        db.executescript((Path(__file__).parent / 'migrations/0003_author_roles.sql').read_text())
+        db.execute('INSERT OR IGNORE INTO schema_version VALUES(3)')
+        db.commit()
+        version = 3
+    if version < 4:
+        db.executescript((Path(__file__).parent / 'migrations/0004_author_phone_evidence.sql').read_text())
+        db.execute('INSERT OR IGNORE INTO schema_version VALUES(4)')
+        db.commit()
+    register_authors(db)
+    register_contacts(db)
+    register_author_contact_candidates(db)
     return db
+
+
+def normalize_whatsapp_phone(value):
+    digits = re.sub(r'\D', '', value or '')
+    if len(digits) in {10, 11}:
+        digits = '55' + digits
+    if not digits.startswith('55') or len(digits) not in {12, 13}:
+        return None
+    ddd = int(digits[2:4])
+    if not 11 <= ddd <= 99:
+        return None
+    return digits
+
+
+def normalize_person_name(value):
+    value = unicodedata.normalize('NFKD', value or '').encode('ascii', 'ignore').decode().lower()
+    return re.sub(r'[^a-z0-9]+', '', value)
+
+
+def parse_vcards(text):
+    unfolded = re.sub(r'\r?\n[ \t]', '', text)
+    cards=[]; current=None
+    for line in unfolded.splitlines():
+        line=line.strip()
+        if line.upper() == 'BEGIN:VCARD':
+            current={'name':'','phones':set()}
+        elif line.upper() == 'END:VCARD':
+            if current and current['name']:
+                cards.append(current)
+            current=None
+        elif current is not None and ':' in line:
+            prop,value=line.split(':',1)
+            field=prop.split(';',1)[0].split('.')[-1].upper()
+            value=re.sub(r'\\([\\,;nN])',lambda m: {'n':'\n','N':'\n'}.get(m.group(1),m.group(1)),value).strip()
+            if field=='FN' and value:
+                current['name']=value
+            elif field=='TEL':
+                phone=normalize_whatsapp_phone(value.replace('tel:',''))
+                if phone: current['phones'].add(phone)
+    return cards
+
+
+def register_authors(db, source_id=None):
+    """Give each raw author a stable ID within its source conversation.
+
+    A matching display name in another export is deliberately not merged: names
+    alone do not establish that two records are the same WhatsApp contact.
+    """
+    where = 'WHERE s.kind = ?'
+    params = ['text']
+    if source_id is not None:
+        where += ' AND s.id = ?'
+        params.append(source_id)
+    rows = db.execute(f'''SELECT DISTINCT s.company, s.id source_id, m.author
+        FROM sources s JOIN messages m ON m.source_id=s.id
+        {where} AND m.author IS NOT NULL AND trim(m.author) != '' ''', params).fetchall()
+    for row in rows:
+        db.execute('''INSERT OR IGNORE INTO conversation_authors
+            (company,source_id,display_name,link_status)
+            VALUES(?,?,?,'unresolved')''',
+            (row['company'], row['source_id'], row['author']))
+    # A phone used as the WhatsApp export's author label identifies that sender
+    # directly. Phone numbers merely mentioned in message text are not auto-linked.
+    authors = db.execute("SELECT id,display_name FROM conversation_authors WHERE link_status='unresolved'").fetchall()
+    for author in authors:
+        phone = normalize_whatsapp_phone(author['display_name'])
+        if phone:
+            db.execute("UPDATE conversation_authors SET link_status='phone_identified',phone_e164=? WHERE id=?",
+                       (phone, author['id']))
+    identified=db.execute('''SELECT id,company,source_id,phone_e164 FROM conversation_authors
+        WHERE phone_e164 IS NOT NULL''').fetchall()
+    for author in identified:
+        db.execute('''INSERT OR IGNORE INTO author_phone_evidence
+            (company,source_id,author_id,message_id,phone_e164,evidence_type,status)
+            VALUES(?,?,?,NULL,?,'author_label','confirmed')''',
+            (author['company'],author['source_id'],author['id'],author['phone_e164']))
+    db.execute('''UPDATE messages SET author_id=(
+        SELECT a.id FROM conversation_authors a
+        WHERE a.source_id=messages.source_id AND a.display_name=messages.author)
+        WHERE author IS NOT NULL AND author_id IS NULL''')
+    db.commit()
+    return len(rows)
+
+
+def register_contacts(db, company=None):
+    """Import address-book cards into private staging, never into the app or Git."""
+    query="SELECT id,company,root,relative_path,sha256 FROM sources WHERE lower(relative_path) LIKE '%.vcf'"
+    params=[]
+    if company is not None:
+        query+=' AND company=?';params.append(company)
+    for source in db.execute(query,params).fetchall():
+        root=Path(source['root']).absolute()
+        relative=Path(source['relative_path'])
+        path=root/relative
+        components=[root]
+        for part in relative.parts:
+            components.append(components[-1]/part)
+        if relative.is_absolute() or '..' in relative.parts or any(p.is_symlink() for p in components):
+            continue
+        if not path.is_file() or file_hash(path)!=source['sha256']:
+            continue
+        try: cards=parse_vcards(path.read_text(encoding='utf-8-sig',errors='strict'))
+        except (UnicodeError,OSError): continue
+        for card in cards:
+            phones=card['phones'] or {None}
+            for phone in phones:
+                key=hashlib.sha256((normalize_person_name(card['name'])+'|'+(phone or '')).encode()).hexdigest()
+                db.execute('''INSERT OR IGNORE INTO contact_cards
+                    (company,source_id,card_key,display_name,phone_e164)
+                    VALUES(?,?,?,?,?)''',
+                    (source['company'],source['id'],key,card['name'],phone))
+    db.commit()
+
+
+def register_author_contact_candidates(db, company=None):
+    query='''SELECT a.id author_id,a.display_name,a.phone_e164,a.company,
+        c.id contact_id,c.display_name contact_name,c.phone_e164 contact_phone
+        FROM conversation_authors a JOIN contact_cards c ON c.company=a.company'''
+    params=[]
+    if company is not None:
+        query+=' WHERE a.company=?';params.append(company)
+    inserted=0
+    for row in db.execute(query,params).fetchall():
+        method=None
+        if row['phone_e164'] and row['phone_e164']==row['contact_phone']:
+            method='exact_phone'
+        elif normalize_person_name(row['display_name']) and normalize_person_name(row['display_name'])==normalize_person_name(row['contact_name']):
+            method='exact_name'
+        if method:
+            status='confirmed' if method=='exact_phone' else 'pending_review'
+            cursor=db.execute('''INSERT OR IGNORE INTO author_contact_candidates
+                (author_id,contact_card_id,match_method,status) VALUES(?,?,?,?)''',
+                (row['author_id'],row['contact_id'],method,status))
+            inserted+=cursor.rowcount
+    db.commit()
+    return inserted
+
+
+def identify_message_phones(db, company):
+    """Link a single explicit phone in a 1:1 export to its classified customer.
+
+    Multiple phones, unidentified roles, or a conflicting phone stay pending.
+    Each candidate retains the exact source message as evidence.
+    """
+    phone_pattern=re.compile(r'(?<!\d)(?:\+?55[ .()-]?)?\(?\d{2}\)?[ .-]?9?\d{4}[ .-]?\d{4}(?!\d)')
+    sources=db.execute('SELECT id FROM sources WHERE company=? AND kind=\'text\'',(company,)).fetchall()
+    confirmed=pending=0
+    for source in sources:
+        occurrences={}
+        for message in db.execute('SELECT id,body FROM messages WHERE source_id=? AND system=0',(source['id'],)):
+            for match in phone_pattern.finditer(message['body'] or ''):
+                phone=normalize_whatsapp_phone(match.group())
+                if phone:occurrences.setdefault(phone,set()).add(message['id'])
+        if not occurrences:continue
+        customers=db.execute("SELECT id,phone_e164 FROM conversation_authors WHERE source_id=? AND speaker_role='customer'",(source['id'],)).fetchall()
+        customer=customers[0] if len(customers)==1 else None
+        for phone,message_ids in occurrences.items():
+            clear=len(occurrences)==1 and customer is not None and customer['phone_e164'] in {None,phone}
+            status='confirmed' if clear else 'pending_review'
+            with db:
+                for message_id in message_ids:
+                    db.execute('''INSERT OR IGNORE INTO author_phone_evidence
+                        (company,source_id,author_id,message_id,phone_e164,evidence_type,status)
+                        VALUES(?,?,?,?,?,'message_body',?)''',
+                        (company,source['id'],customer['id'] if customer else None,message_id,phone,status))
+                if clear:
+                    db.execute("UPDATE conversation_authors SET phone_e164=?,link_status='phone_identified' WHERE id=? AND link_status IN ('unresolved','phone_identified')",
+                               (phone,customer['id']))
+            if clear:confirmed+=1
+            else:pending+=1
+    register_author_contact_candidates(db,company)
+    return {'confirmed_phone_links':confirmed,'pending_phone_candidates':pending}
 
 
 def file_hash(path):
@@ -90,6 +282,20 @@ def kind(path):
     return 'audio' if ext in AUDIO else 'video' if ext in VIDEO else 'text' if ext in TEXT else 'attachment'
 
 
+def attachment_references(body, source_rows):
+    """Resolve an export marker only to a filename literally present in the same archive."""
+    refs=set()
+    names={Path(row['relative_path']).name for row in source_rows if row['kind']!='text'}
+    for match in MEDIA.finditer(body or ''):
+        raw=next((v.strip().strip('\u200e\u200f\u202a\u202c').strip() for v in match.groups() if v), '')
+        if not raw:continue
+        if raw in names:
+            refs.add(raw);continue
+        suffix_matches={name for name in names if raw.endswith(name)}
+        refs.add(next(iter(suffix_matches)) if len(suffix_matches)==1 else raw)
+    return refs
+
+
 def ingest(db, root, company, max_exports=None, export_relative=None):
     if not company.strip():
         raise ValueError('Empresa obrigatória')
@@ -121,7 +327,7 @@ def ingest(db, root, company, max_exports=None, export_relative=None):
                     db.execute('INSERT OR IGNORE INTO messages(source_id,ordinal,date_raw,author,body,system) VALUES(?,?,?,?,?,?)',
                         (source['id'],ordinal,message['date_raw'],message['author'],message['body'],message['system']))
                     message_id = db.execute('SELECT id FROM messages WHERE source_id=? AND ordinal=?',(source['id'],ordinal)).fetchone()[0]
-                    refs = {next(v.strip().strip('\u200e\u200f\u202a\u202c').strip() for v in m.groups() if v) for m in MEDIA.finditer(message['body'])}
+                    refs = attachment_references(message['body'],current)
                     # Bare filenames only link when literally present, never from chronological proximity.
                     refs.update(Path(r['relative_path']).name for r in current if r['kind'] != 'text' and message['body'].strip() == Path(r['relative_path']).name)
                     if re.search(r'<(?:Mídia oculta|Media omitted)>',message['body'],re.I):
@@ -135,7 +341,76 @@ def ingest(db, root, company, max_exports=None, export_relative=None):
         except (UnicodeError, OSError):
             with db:
                 db.execute('UPDATE sources SET status=?,error=? WHERE id=?',('error','text_decode_or_io',source['id']))
+    register_authors(db)
+    register_contacts(db, company)
+    register_author_contact_candidates(db, company)
     return {'sources':len(current),'exports_selected':imported}
+
+
+def link_author(db, company, author_id, contact_key, confirm_match=False):
+    """Record a human-confirmed author-to-WhatsApp identity mapping."""
+    if not confirm_match:
+        raise ValueError('Confirme que este autor corresponde a este contato do WhatsApp')
+    contact_key = contact_key.strip()
+    if not contact_key or len(contact_key) > 180:
+        raise ValueError('Identificador de contato inválido')
+    row = db.execute('SELECT id FROM conversation_authors WHERE id=? AND company=?',
+                     (author_id, company)).fetchone()
+    if row is None:
+        raise ValueError('Autor inexistente nesta empresa')
+    with db:
+        db.execute("UPDATE conversation_authors SET link_status='linked',whatsapp_contact_key=? WHERE id=?",
+                   (contact_key, author_id))
+    return {'author_id':author_id,'link_status':'linked'}
+
+
+def classify_authors(db, company, staff_name):
+    """Mark a user-confirmed staff author and the other speaker in 1:1 chats."""
+    normalized_staff=normalize_person_name(staff_name)
+    if not normalized_staff:
+        raise ValueError('Nome da equipe inválido')
+    exports=db.execute('''SELECT DISTINCT s.id source_id FROM sources s
+        JOIN conversation_authors a ON a.source_id=s.id WHERE s.company=?''',(company,)).fetchall()
+    staff_count=customer_count=unresolved_count=0
+    for export in exports:
+        authors=db.execute('SELECT id,display_name FROM conversation_authors WHERE source_id=?',(export['source_id'],)).fetchall()
+        matches=[a for a in authors if normalize_person_name(a['display_name'])==normalized_staff]
+        if len(matches)!=1:
+            unresolved_count+=len(authors)
+            continue
+        team=matches[0]
+        with db:
+            db.execute("UPDATE conversation_authors SET speaker_role='staff' WHERE id=?",(team['id'],))
+        staff_count+=1
+        counterparts=[a for a in authors if a['id']!=team['id']]
+        if len(authors)==2 and len(counterparts)==1:
+            with db:
+                db.execute("UPDATE conversation_authors SET speaker_role='customer' WHERE id=?",(counterparts[0]['id'],))
+            customer_count+=1
+        else:
+            unresolved_count+=len(counterparts)
+    # An exact name match to a staff contact is not evidence that the card is a customer.
+    with db:
+        db.execute('''UPDATE author_contact_candidates SET status='rejected'
+            WHERE match_method='exact_name' AND author_id IN
+            (SELECT id FROM conversation_authors WHERE company=? AND speaker_role='staff')''',(company,))
+    return {'staff_authors':staff_count,'customer_authors':customer_count,'unresolved_authors':unresolved_count}
+
+
+def export_authors(db, company, output):
+    output = private_path(output)
+    output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    rows = db.execute('''SELECT a.id author_id,s.relative_path,a.display_name,a.speaker_role,a.link_status,
+        a.phone_e164,a.whatsapp_contact_key,count(m.id) message_count
+        FROM conversation_authors a JOIN sources s ON s.id=a.source_id
+        LEFT JOIN messages m ON m.author_id=a.id
+        WHERE a.company=? GROUP BY a.id ORDER BY s.relative_path,a.display_name''', (company,)).fetchall()
+    with output.open('x', encoding='utf-8', newline='') as stream:
+        os.chmod(output, 0o600)
+        writer = csv.writer(stream)
+        writer.writerow(['author_id','conversation_source','author','speaker_role','link_status','phone_e164','whatsapp_contact_key','message_count'])
+        writer.writerows([tuple(row) for row in rows])
+    return {'saved_private':True,'author_records':len(rows)}
 
 
 def transcribe(db, source_id, company, model_path, model_name='tiny', threads=2):
@@ -147,22 +422,63 @@ def transcribe(db, source_id, company, model_path, model_name='tiny', threads=2)
         return _transcribe(db, source_id, company, model_path, model_name, threads)
 
 
-def _transcribe(db, source_id, company, model_path, model_name='tiny', threads=2):
-    row = db.execute('SELECT * FROM sources WHERE id=? AND company=?',(source_id,company)).fetchone()
-    if not row or row['kind'] not in {'audio','video'}:
-        raise ValueError('Mídia inexistente nesta empresa')
-    source = Path(row['root'])/row['relative_path']
-    if source not in list(paths(Path(row['root']))) or file_hash(source) != row['sha256']:
-        raise ValueError('Fonte alterada ou insegura; reinvente antes')
-    model_path = private_path(model_path)
-    if not model_path.is_dir():
-        raise ValueError('Modelo local ausente')
-    # Cache identity includes every model artifact; changed weights cannot reuse old output.
+def _transcription_recipe(model_path, model_name):
     ffmpeg_version = subprocess.check_output(['ffmpeg','-version'],text=True).splitlines()[0]
     model_files = [p for p in paths(model_path) if '.cache' not in p.relative_to(model_path).parts]
     model_hash = hashlib.sha256(''.join(str(p.relative_to(model_path))+file_hash(p) for p in model_files).encode()).hexdigest()
     import importlib.metadata
-    recipe = f'{VERSION}:faster-whisper-{importlib.metadata.version("faster-whisper")}:{model_name}:{model_hash}:cpu:int8:pt:beam1:vad0:ffmpeg16k:{ffmpeg_version}'
+    return f'{VERSION}:faster-whisper-{importlib.metadata.version("faster-whisper")}:{model_name}:{model_hash}:cpu:int8:pt:beam1:vad0:ffmpeg16k:{ffmpeg_version}'
+
+
+def transcribe_all(db, company, model_path, model_name='tiny', threads=2, progress=None):
+    """Transcribe every audio/video source for one company, loading the local model once."""
+    lock_path=private_path(db.execute('PRAGMA database_list').fetchone()[2]).with_suffix('.lock')
+    with lock_path.open('a') as lock:
+        os.chmod(lock_path,0o600)
+        fcntl.flock(lock,fcntl.LOCK_EX)
+        model_path=private_path(model_path)
+        if not model_path.is_dir():raise ValueError('Modelo local ausente')
+        ids=[r[0] for r in db.execute("SELECT id FROM sources WHERE company=? AND kind IN ('audio','video') ORDER BY id",(company,))]
+        recipe=_transcription_recipe(model_path,model_name)
+        pending=[]
+        for source_id in ids:
+            db.execute('INSERT OR IGNORE INTO transcriptions(source_id,recipe,status) VALUES(?,?,?)',(source_id,recipe,'pending'))
+            job=db.execute('SELECT status FROM transcriptions WHERE source_id=? AND recipe=?',(source_id,recipe)).fetchone()
+            if job['status']!='done':pending.append(source_id)
+        db.commit()
+        if not pending:return {'total':len(ids),'done':len(ids),'reused':len(ids),'errors':0}
+        try:
+            os.environ['HF_HUB_OFFLINE']='1';os.environ['HF_HUB_DISABLE_TELEMETRY']='1'
+            from faster_whisper import WhisperModel
+            model=WhisperModel(str(model_path),device='cpu',compute_type='int8',cpu_threads=threads,num_workers=1,local_files_only=True)
+        except Exception as exc:
+            return {'total':len(ids),'done':len(ids)-len(pending),'errors':len(pending),'model_error_class':type(exc).__name__}
+        counts={'done':0,'reused':0,'errors':0}; started=time.monotonic()
+        for index,source_id in enumerate(pending,1):
+            result=_transcribe(db,source_id,company,model_path,model_name,threads,model=model,recipe=recipe)
+            key='errors' if result['status']=='error' else result['status']
+            counts[key]=counts.get(key,0)+1
+            if progress and (index % 10==0 or index==len(pending)):
+                progress({'processed':index,'pending':len(pending),'elapsed_seconds':round(time.monotonic()-started,1),'errors':counts['errors']})
+        already_done=len(ids)-len(pending)
+        return {'total':len(ids),'done':already_done+counts['done']+counts['reused'],
+            'reused':already_done+counts['reused'],'errors':counts['errors'],
+            'elapsed_seconds':round(time.monotonic()-started,1)}
+
+
+def _transcribe(db, source_id, company, model_path, model_name='tiny', threads=2, model=None, recipe=None):
+    row = db.execute('SELECT * FROM sources WHERE id=? AND company=?',(source_id,company)).fetchone()
+    if not row or row['kind'] not in {'audio','video'}:
+        raise ValueError('Mídia inexistente nesta empresa')
+    source = Path(row['root'])/row['relative_path']
+    root=Path(row['root']).absolute();relative=Path(row['relative_path']);components=[root]
+    for part in relative.parts:components.append(components[-1]/part)
+    if relative.is_absolute() or '..' in relative.parts or any(p.is_symlink() for p in components) or not source.is_file() or file_hash(source) != row['sha256']:
+        raise ValueError('Fonte alterada ou insegura; reinvente antes')
+    model_path = private_path(model_path)
+    if not model_path.is_dir():
+        raise ValueError('Modelo local ausente')
+    recipe=recipe or _transcription_recipe(model_path,model_name)
     with db:
         db.execute('INSERT OR IGNORE INTO transcriptions(source_id,recipe,status) VALUES(?,?,?)',(source_id,recipe,'pending'))
     job = db.execute('SELECT * FROM transcriptions WHERE source_id=? AND recipe=?',(source_id,recipe)).fetchone()
@@ -174,11 +490,12 @@ def _transcribe(db, source_id, company, model_path, model_name='tiny', threads=2
     try:
         os.environ['HF_HUB_OFFLINE']='1'
         os.environ['HF_HUB_DISABLE_TELEMETRY']='1'
-        from faster_whisper import WhisperModel
         with tempfile.TemporaryDirectory(prefix='orchestra-audio-', dir=str(private_path(db.execute('PRAGMA database_list').fetchone()[2]).parent)) as folder:
             wav=Path(folder)/'audio.wav'
             subprocess.run(['ffmpeg','-nostdin','-v','error','-protocol_whitelist','file,pipe','-i',str(source),'-vn','-ac','1','-ar','16000',str(wav)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=True,timeout=600)
-            model=WhisperModel(str(model_path),device='cpu',compute_type='int8',cpu_threads=threads,num_workers=1,local_files_only=True)
+            if model is None:
+                from faster_whisper import WhisperModel
+                model=WhisperModel(str(model_path),device='cpu',compute_type='int8',cpu_threads=threads,num_workers=1,local_files_only=True)
             segments, info=model.transcribe(str(wav),language='pt',beam_size=1,vad_filter=False,condition_on_previous_text=False)
             with db:
                 db.execute('DELETE FROM segments WHERE transcription_id=?',(job['id'],))
@@ -195,8 +512,15 @@ def _transcribe(db, source_id, company, model_path, model_name='tiny', threads=2
 
 def reconstruct(db, company):
     result=[]
-    for message in db.execute('SELECT m.* FROM messages m JOIN sources s ON s.id=m.source_id WHERE s.company=? ORDER BY m.source_id,m.ordinal',(company,)):
-        item=dict(message); item['attachments']=[]
+    for message in db.execute('''SELECT m.*,a.speaker_role,a.display_name author_identity,
+        a.phone_e164,a.whatsapp_contact_key,a.link_status identity_link_status FROM messages m
+        JOIN sources s ON s.id=m.source_id LEFT JOIN conversation_authors a ON a.id=m.author_id
+        WHERE s.company=? ORDER BY m.source_id,m.ordinal''',(company,)):
+        item=dict(message); item['attachments']=[];item['author_contact_candidates']=[]
+        if message['author_id']:
+            item['author_contact_candidates']=[dict(r) for r in db.execute('''SELECT c.display_name,c.phone_e164,x.match_method,x.status
+                FROM author_contact_candidates x JOIN contact_cards c ON c.id=x.contact_card_id
+                WHERE x.author_id=? ORDER BY x.match_method,c.display_name''',(message['author_id'],))]
         for link in db.execute('SELECT * FROM attachments WHERE message_id=?',(message['id'],)):
             media=dict(link)
             job=db.execute("SELECT id,recipe FROM transcriptions WHERE source_id=? AND status='done' ORDER BY id DESC LIMIT 1",(link['source_id'],)).fetchone()
@@ -217,10 +541,89 @@ def redact(text, names=()):
         if name:
             text=re.sub(re.escape(name),'[PESSOA]',text,flags=re.I)
     patterns=[(r'https?://\S+','[LINK]'),(r'[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}','[EMAIL]'),
-              (r'\+?\d[\d\s()./-]{6,}\d','[NUMERO]')]
+              (r'(?<!\d)(?:\+?55[\s().-]*)?\(?[1-9]\d\)?[\s().-]?(?:9?\d{4})[\s.-]?\d{4}(?!\d)','[TELEFONE]'),
+              (r'(?<!\d)(?:\d{3}\.?\d{3}\.?\d{3}-?\d{2}|\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2})(?!\d)','[DOCUMENTO]'),
+              (r'\b(?:Rua|R\.|Avenida|Av\.|Travessa|Alameda|Rodovia|Estrada)\s+[^,;\n]{2,70}','[ENDEREÇO]')]
     for pattern,replacement in patterns:
         text=re.sub(pattern,replacement,text)
     return text
+
+
+def export_learning_corpus(db, company, output_dir, max_chars=300000):
+    """Write a private, role-labeled and redacted copy for human review before indexing."""
+    if not 10000 <= max_chars <= 330000:
+        raise ValueError('O tamanho precisa caber no limite de trechos da busca')
+    output_dir=private_path(output_dir)
+    output_dir.mkdir(mode=0o700,parents=True,exist_ok=True)
+    names={r[0] for r in db.execute('SELECT display_name FROM conversation_authors WHERE company=?',(company,))}
+    names.update(r[0] for r in db.execute('SELECT display_name FROM contact_cards WHERE company=?',(company,)))
+    names={name for name in names if name}
+    header=['# Exemplos históricos de conversas','','Material derivado do histórico privado. Use para exemplos de estilo e contexto, nunca como regra, preço, estoque ou política atual. Revisão humana de privacidade e qualidade obrigatória antes de indexar.','','Áudios foram transcritos localmente e ainda podem conter erros. Transcrição de vídeo não interpreta imagens. Anexos sem extração permanecem marcadores.','']
+    # Exact duplicate exports are retained in staging for provenance but included once
+    # in the derived corpus, avoiding repeated conversational examples in retrieval.
+    source_rows=db.execute('''SELECT min(s.id) id,s.sha256 FROM sources s WHERE s.company=? AND s.kind='text'
+        AND EXISTS(SELECT 1 FROM messages m WHERE m.source_id=s.id)
+        GROUP BY s.sha256 ORDER BY min(s.relative_path),min(s.id)''',(company,)).fetchall()
+    blocks=[];message_count=0
+    for source in source_rows:
+        rows=db.execute('''SELECT m.id,m.ordinal,m.date_raw,m.author,m.author_id,m.body,m.system,a.speaker_role
+            FROM messages m LEFT JOIN conversation_authors a ON a.id=m.author_id
+            WHERE m.source_id=? ORDER BY m.ordinal''',(source['id'],)).fetchall()
+        if not any(not r['system'] for r in rows):continue
+        block=['## Conversa '+source['sha256'][:10]];author_labels={}
+        for row in rows:
+            if row['system']:continue
+            role=row['speaker_role'] or 'unresolved'
+            if role=='staff':label='Equipe'
+            elif role=='customer':label='Cliente'
+            else:
+                key=row['author_id'] or row['author'] or 'desconhecido'
+                if key not in author_labels:author_labels[key]=f'Autor {len(author_labels)+1}'
+                label=author_labels[key]
+            body=row['body'] or '[mensagem sem texto]'
+            attachments=db.execute('''SELECT a.reference,a.status,a.source_id,s.kind FROM attachments a
+                LEFT JOIN sources s ON s.id=a.source_id WHERE a.message_id=?''',(row['id'],)).fetchall()
+            media_notes=[]
+            for attachment in attachments:
+                reference=attachment['reference'] or ''
+                filename=Path(reference).name
+                for token in {reference,filename}:
+                    if token and token not in {'[media omitted]'}:
+                        body=re.sub(re.escape(token), '[ANEXO]',body,flags=re.I)
+                body=re.sub(r'\s*\((?:arquivo anexado|file attached)\)','',body,flags=re.I)
+                if attachment['status']!='linked' or not attachment['source_id']:
+                    media_notes.append('[Anexo sem associação confirmada]');continue
+                kind=attachment['kind']
+                if kind in {'audio','video'}:
+                    job=db.execute("SELECT id FROM transcriptions WHERE source_id=? AND status='done' ORDER BY id DESC LIMIT 1",(attachment['source_id'],)).fetchone()
+                    if job:
+                        segments=db.execute('SELECT start,end,text FROM segments WHERE transcription_id=? ORDER BY ordinal',(job['id'],)).fetchall()
+                        if segments:
+                            media_notes.append(f'[Transcrição local de anexo enviado por {label}; falante não identificado, revisar] '+ ' '.join(
+                                f"({int(s['start']//60):02d}:{s['start']%60:05.2f}) {redact(s['text'],names)}" for s in segments))
+                        else:media_notes.append('[Mídia transcrita sem segmentos]')
+                    else:media_notes.append('[Áudio/vídeo sem transcrição]')
+                elif kind=='attachment':media_notes.append('[Anexo sem extração textual]')
+            body=redact(body,names)
+            if '<Mídia oculta>' in body or '<Media omitted>' in body:
+                body=re.sub(r'<(?:Mídia oculta|Media omitted)>','[Anexo não disponível]',body,flags=re.I)
+            date=redact(row['date_raw'] or 'data não registrada',names)
+            block.append(f'- {date} | {label}: {body} '+ ' '.join(media_notes))
+            message_count+=1
+        blocks.append('\n'.join(block)+'\n')
+    batches=[];current='\n'.join(header)+'\n'
+    for block in blocks:
+        if len(current)+len(block)>max_chars and len(current)>len('\n'.join(header)):
+            batches.append(current);current='\n'.join(header)+'\n'
+        if len(current)+len(block)>max_chars:
+            raise ValueError('Uma conversa excede o limite de exportação; divida-a com revisão')
+        current+=block
+    if current.strip():batches.append(current)
+    for index,content in enumerate(batches,1):
+        target=output_dir/f'conversas-atendimento-{index:02d}.md'
+        fd=os.open(target,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+        with os.fdopen(fd,'w',encoding='utf-8') as stream:stream.write(content)
+    return {'saved_private':True,'conversations':len(blocks),'messages':message_count,'files':len(batches)}
 
 
 def propose(db, company, ids, category, text):
@@ -260,20 +663,34 @@ def main():
     sub=parser.add_subparsers(dest='command',required=True)
     p=sub.add_parser('ingest');p.add_argument('root',type=Path);p.add_argument('--max-exports',type=int,default=1);p.add_argument('--export-relative')
     p=sub.add_parser('transcribe');p.add_argument('--source-id',type=int,required=True);p.add_argument('--model-path',type=Path,required=True)
+    p=sub.add_parser('transcribe-all');p.add_argument('--model-path',type=Path,required=True);p.add_argument('--model-name',default='tiny');p.add_argument('--threads',type=int,default=2)
     p=sub.add_parser('propose');p.add_argument('--message-id',action='append',type=int,required=True);p.add_argument('--kind',choices=['fact','example'],required=True);p.add_argument('--text-file',type=Path,required=True)
     p=sub.add_parser('approve');p.add_argument('--proposal-id',type=int,required=True);p.add_argument('--reviewer',required=True);p.add_argument('--confirm-personal-and-factual-review',action='store_true');p.add_argument('--valid-until')
     p=sub.add_parser('reconstruct');p.add_argument('--output',type=Path,required=True)
+    p=sub.add_parser('authors');p.add_argument('--output',type=Path,required=True)
+    p=sub.add_parser('link-author');p.add_argument('--author-id',type=int,required=True);p.add_argument('--contact-key',required=True);p.add_argument('--confirm-contact-match',action='store_true')
+    p=sub.add_parser('classify-authors');p.add_argument('--staff-name',required=True)
+    sub.add_parser('identify-phones')
+    p=sub.add_parser('export-learning-corpus');p.add_argument('--output-dir',type=Path,required=True);p.add_argument('--max-chars',type=int,default=300000)
     args=parser.parse_args();os.umask(0o077)
     with connect(args.db) as db:
         if args.command=='ingest':
             if args.max_exports < 1: parser.error('Limite positivo obrigatório')
             result=ingest(db,args.root,args.company,args.max_exports,args.export_relative)
         elif args.command=='transcribe':result=transcribe(db,args.source_id,args.company,args.model_path)
+        elif args.command=='transcribe-all':
+            result=transcribe_all(db,args.company,args.model_path,args.model_name,args.threads,
+                progress=lambda item: print(json.dumps({'progress':item}),flush=True))
         elif args.command=='propose':
             result={'proposal_id':propose(db,args.company,args.message_id,args.kind,private_path(args.text_file).read_text(encoding='utf-8')),'status':'pending_review'}
         elif args.command=='approve':
             approve(db,args.company,args.proposal_id,args.reviewer,args.confirm_personal_and_factual_review,args.valid_until)
             result={'status':'approved_local','indexed':False}
+        elif args.command=='authors':result=export_authors(db,args.company,args.output)
+        elif args.command=='link-author':result=link_author(db,args.company,args.author_id,args.contact_key,args.confirm_contact_match)
+        elif args.command=='classify-authors':result=classify_authors(db,args.company,args.staff_name)
+        elif args.command=='identify-phones':result=identify_message_phones(db,args.company)
+        elif args.command=='export-learning-corpus':result=export_learning_corpus(db,args.company,args.output_dir,args.max_chars)
         else:
             out=private_path(args.output);out.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
             with out.open('x',encoding='utf-8') as stream:json.dump(reconstruct(db,args.company),stream,ensure_ascii=False,indent=2)

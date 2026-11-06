@@ -81,12 +81,15 @@ confiável, mesmo que venha do histórico de atendimento. O acesso a ferramentas
 permissões, prompt de sistema e política de envio pertence ao código/configuração
 administrativa, não aos documentos.
 
-## Limites da entrega atual
+## Estado atual
 
-A primeira entrega cobriu proteção e inventário. A etapa seguinte implementa
-[ingestão local e uma amostra](ingestao-local-whatsapp.md), com transcrição offline,
-staging privado e propostas pendentes de revisão. Não há publicação automática
-nem processamento integral autorizado do acervo.
-A API atual de upload de documentos chama embeddings: não usá-la para conversas
-brutas ou candidatos pendentes. Também não usar estes arquivos como prompts de
-teste, logs, anexos de PR ou conteúdo de imagens Docker.
+A responsável autorizou o processamento local integral e definiu uso duplo: histórico
+por contato e exemplos para conhecimento geral de atendimento. A transcrição local
+está em andamento. A separação, a revisão de privacidade e a futura associação de cada
+histórico ao identificador recebido pelo WhatsApp continuam necessárias.
+
+Não há importação para produção nem envio a embeddings nesta etapa. A API atual de
+upload chama um provedor externo; não usá-la para conversas brutas ou candidatos
+pendentes. Também não usar os arquivos privados como prompts de teste, logs, anexos
+de PR ou conteúdo de imagens Docker. Ver [uso duplo das conversas](uso-duplo-conversas.md)
+e [ingestão local](ingestao-local-whatsapp.md).

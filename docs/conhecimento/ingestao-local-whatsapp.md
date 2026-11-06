@@ -1,4 +1,4 @@
-# Ingestão privada de WhatsApp — amostra local
+# Ingestão privada de WhatsApp
 
 Implementação separada em scripts/private_knowledge/pipeline.py. Reutiliza a área
 privada e o inventário anterior (inventory.py); não duplica a API de documentos.
@@ -36,6 +36,11 @@ Exemplo sintético, caminhos devem ser adaptados sem publicar nomes pessoais:
 python scripts/private_knowledge/inventory.py /pasta/exportacoes --output /pasta-privada/inventario.json
 python scripts/private_knowledge/pipeline.py --db /pasta-privada/staging.sqlite --company EMPRESA ingest /pasta/exportacoes --export-relative export.txt --max-exports 1
 python scripts/private_knowledge/pipeline.py --db /pasta-privada/staging.sqlite --company EMPRESA transcribe --source-id 2 --model-path /pasta-privada/modelo
+python scripts/private_knowledge/pipeline.py --db /pasta-privada/staging.sqlite --company EMPRESA transcribe-all --model-path /pasta-privada/modelo --threads 2
+python scripts/private_knowledge/pipeline.py --db /pasta-privada/staging.sqlite --company EMPRESA classify-authors --staff-name NOME_CONFIRMADO
+python scripts/private_knowledge/pipeline.py --db /pasta-privada/staging.sqlite --company EMPRESA identify-phones
+python scripts/private_knowledge/pipeline.py --db /pasta-privada/staging.sqlite --company EMPRESA authors --output /pasta-privada/autores.csv
+python scripts/private_knowledge/pipeline.py --db /pasta-privada/staging.sqlite --company EMPRESA export-learning-corpus --output-dir /pasta-privada/conhecimento-derivado
 python scripts/private_knowledge/pipeline.py --db /pasta-privada/staging.sqlite --company EMPRESA reconstruct --output /pasta-privada/conversa.json
 python scripts/private_knowledge/pipeline.py --db /pasta-privada/staging.sqlite --company EMPRESA propose --message-id 1 --kind example --text-file /pasta-privada/candidato.txt
 python scripts/private_knowledge/pipeline.py --db /pasta-privada/staging.sqlite --company EMPRESA approve --proposal-id 1 --reviewer REVISOR --confirm-personal-and-factual-review
@@ -45,21 +50,34 @@ IDs devem ser consultados **localmente** no SQLite, sempre filtrando company. N�
 copiar resultados de SELECT com conteúdo para tickets, chat, Git ou logs. A transcrição
 é explícita por fonte: o comando ingest inventaria a pasta recursivamente, mas só lê
 as exportações selecionadas e não transcreve todo o acervo. max-exports tem padrão 1.
+`transcribe-all` carrega o modelo local uma vez, é retomável por fonte e escreve
+contadores de progresso sem conteúdo nos logs. `classify-authors` recebe um nome de
+equipe confirmado e só classifica o outro participante como cliente quando a
+exportação tem exatamente dois autores. `authors` exporta nomes e telefones para CSV
+privado; nunca salvar esse arquivo no repositório. Um único telefone distinto no corpo
+de uma conversa 1:1 com cliente classificado pode ser associado, com mensagem de origem.
+Múltiplos telefones, conflito ou papel desconhecido ficam pendentes de revisão.
+`export-learning-corpus` grava uma cópia sanitizada e limitada em tamanho para revisão
+humana; os arquivos não são indexados automaticamente.
 O comando reconstruct preserva todas as versões históricas por source_id; consumidores
 não devem misturá-las como uma única conversa nem assumir que uma substituiu outra.
 Os outputs recusam sobrescrita; use outro nome para uma reconstrução posterior.
 
 ## Persistência, vínculos e retomada
 
-Migration SQLite 0001_private.sql é exclusiva deste staging, fora do Alembic de
-produção. Tabelas: sources, messages, attachments, transcriptions, segments,
-proposals e proposal_messages. SHA256/empresa/caminho/versão identificam fontes;
+As migrações SQLite 0001–0004 são exclusivas deste staging, fora do Alembic de
+produção. Tabelas incluem fontes, mensagens, anexos, autores por conversa, cartões
+de contato, candidatos de associação, transcrições, segmentos e propostas.
+SHA256/empresa/caminho/versão identificam fontes;
 ordem pertence à exportação, data original fica textual, sem presumir fuso, século
 ou interpretação de data ambígua. Fontes alteradas ganham revisão, sem apagar antigas.
 
 Parser suporta cabeçalhos Android/iOS e continuações multilinha. Mensagens de sistema
 ficam sem autor; não há diarização da fala. O autor do envio não é necessariamente o
-falante do áudio. Referências explícitas e nome isolado vinculam apenas arquivo da
+falante do áudio. Autores têm identificador próprio dentro da exportação; nomes iguais
+não são unidos entre conversas. Um telefone no campo de autor é normalizado para
+associação posterior; telefones citados no corpo não vinculam automaticamente uma
+pessoa. Referências explícitas e nome isolado vinculam apenas arquivo da
 mesma pasta. Caracteres de direção invisíveis são removidos da referência, não do
 original. Nomes em prosa, horário próximo, anexos ocultos, arquivos ausentes e nomes
 ambíguos não autorizam associação. Não extrai conhecimento de PDF/imagens/VCF nesta
@@ -121,9 +139,32 @@ sem alerta também exige revisão. Sem VAD podem ocorrer alucinações em músic
 **Transcrever a fala do vídeo não equivale a interpretar suas imagens.** Não se
 conclui intenção, produto exibido, texto em tela ou identidade de falantes.
 
-O acervo completo não foi processado. Próxima decisão: confirmar empresa/subpastas,
-revisar a amostra por escuta, corrigir redação pessoal e avaliar tiny versus base/small
-com folga de memória, antes de autorizar lote maior. Nenhum dado foi à VPS/produção.
+## Atualização do processamento integral
+
+A empresa do acervo foi confirmada. O staging privado contém 61 cópias/exportações
+textuais (60 hashes distintos), 8.013 linhas incluindo mensagens de sistema e 7.799
+mensagens de participantes. Autores foram separados por conversa: 59 autores de
+equipe identificados pelo nome de equipe confirmado pela responsável, 59 clientes inferidos
+somente como contraparte em exportações 1:1 e dois autores sem papel. Isso classificou
+4.159 mensagens como equipe, 3.583 como cliente e manteve 57 sem papel. A identidade
+de cada autor continua local à exportação; nomes iguais não foram unidos entre
+históricos.
+
+Das 791 mídias, 785 têm transcrição local concluída pelo modelo tiny: 738 áudios e 47
+vídeos. Seis vídeos não têm faixa de áudio; não há fala para transcrever. O staging
+mantém 4.733 segmentos. 428 ficaram abaixo do limiar interno de confiança e exigem
+escuta/revisão; essa pontuação não mede acurácia. A inferência foi local, sem envio a
+provedores. Os arquivos privados não foram copiados para Git/Docker nem para a
+VPS/produção.
+
+O histórico completo foi reconstruído em JSON privado, e uma cópia de aprendizado
+com 59 diálogos e 7.721 mensagens foi gerada em quatro arquivos privados. Exportações
+idênticas foram deduplicadas apenas nessa cópia; permanecem no staging com sua
+proveniência. Os oito telefones únicos encontrados em mensagens ficaram vinculados
+com evidência; sete candidatos conflitantes ou ambíguos aguardam revisão. O histórico
+ainda não foi associado a chaves de contato da integração. A cópia de aprendizado
+exige revisão de privacidade e qualidade antes de qualquer indexação. Nenhum dos dois
+foi importado na produção. Veja [uso duplo das conversas](uso-duplo-conversas.md).
 
 ## Validação
 
@@ -134,9 +175,10 @@ isolamento por empresa, aprovação e destinos privados. Smoke real da amostra n
 é teste de acurácia. Contrato de inferência local conferido no
 [código oficial do faster-whisper](https://github.com/SYSTRAN/faster-whisper/blob/master/faster_whisper/transcribe.py).
 
-Nesta entrega, **15 testes locais passaram** (13 da ingestão e 2 da proteção anterior),
-com fixtures sintéticas; validação de sintaxe Python e git diff --check também passou.
+Na validação atual, **19 testes locais passaram**, com fixtures sintéticas;
+`git diff --check` também passou. Isso não mede a qualidade semântica das transcrições.
 Os dados persistentes ficam em /home/Alessandra/Documentos/orchestra-private/ingestao-amostra-20261105:
-sample-v2.sqlite é o banco válido; sample-reviewed-structure.json é a reconstrução
-com proveniência/alertas; summary.json contém somente métricas agregadas. Tentativas
+sample-v2.sqlite é o banco válido; a reconstrução integral e a cópia de aprendizado
+mais recentes ficam em final-20261106, fora do repositório e com acesso restrito.
+Tentativas
 anteriores permanecem separadas para auditoria, não devem ser usadas como versão final.
