@@ -95,11 +95,21 @@ execute downgrade sem revisar dados posteriores, migrations e compatibilidade.
 Restauração de banco exige janela, consistência e autorização; pode perder gravações
 posteriores. Reversão da aplicação deve incluir frontend/Caddy se forem alterados.
 
-## Privacidade e estado do conhecimento
+## Privacidade e histórico de conversas
 
-`docs/Conversas/`, transcrições, SQLite de staging e corpus derivado são privados e
-ficam fora do Git e das imagens Docker. O processamento local não importa histórico
-nem indexa conhecimento em produção. Apenas código, migrations do staging e
-documentação sem conversas pessoais foram publicados. Veja
+`docs/Conversas/`, transcrições, SQLite de staging, JSONL de transferência e corpus
+derivado são privados e ficam fora do Git e das imagens Docker. O exportador local
+gera o pacote de transferência; o importador da aplicação grava mensagens como
+histórico tenant-scoped, com autor, ordem, data original, hash e idempotência.
+Depois de publicada a versão com migration 0008 e concluída a importação, abra
+**Conversas**, escolha a conversa e consulte a linha do tempo. Mensagens históricas
+de cliente/equipe também podem compor o contexto recente quando aquele contato voltar.
+
+O commit `db66dde71dd4c85304632e65a3d9c8849599670f` foi validado por CI, mas está
+na PR #7 até integração. O pacote privado exportado tem 7.934 mensagens em 58
+conversas, após deduplicar cópias idênticas pelo hash. Ainda não o transporte nem
+importe até a migration estar publicada. Não indexe automaticamente o corpus na
+base de conhecimento: o histórico é conversa e contexto, não regra comercial
+aprovada. Veja [`docs/historico-whatsapp.md`](historico-whatsapp.md),
 [`docs/conhecimento/preparacao-privada.md`](conhecimento/preparacao-privada.md) e o
-[handoff](handoff/2026-11-06-publicacao-e-ingestao.md).
+[handoff detalhado](handoff/2026-11-06-publicacao-e-ingestao.md).

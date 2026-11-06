@@ -115,20 +115,58 @@ class Conversation(Base):
     context_state: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
     context_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     pause_reason: Mapped[str | None] = mapped_column(String(40))
+    history_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     response_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+class HistoricalImportBatch(Base):
+    __tablename__ = "historical_import_batches"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "source_sha256", name="uq_history_import_tenant_source"),
+        UniqueConstraint("id", "tenant_id", name="uq_history_import_id_tenant"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    source_timezone: Mapped[str] = mapped_column(String(80), nullable=False)
+    message_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class ConversationContactAlias(Base):
+    __tablename__ = "conversation_contact_aliases"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "instance_id", "contact_key", name="uq_contact_alias_instance_key"),
+        ForeignKeyConstraint(["conversation_id", "tenant_id"], ["conversations.id", "conversations.tenant_id"], ondelete="CASCADE"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    instance_id: Mapped[str] = mapped_column(ForeignKey("zapi_instances.id", ondelete="CASCADE"), nullable=False, index=True)
+    conversation_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    contact_key: Mapped[str] = mapped_column(String(180), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 class Message(Base):
     __tablename__ = "messages"
-    __table_args__ = (Index("ix_message_tenant_conversation_created", "tenant_id", "conversation_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_message_tenant_conversation_created", "tenant_id", "conversation_id", "created_at"),
+        ForeignKeyConstraint(["history_import_batch_id", "tenant_id"], ["historical_import_batches.id", "historical_import_batches.tenant_id"], ondelete="CASCADE"),
+        UniqueConstraint("history_import_batch_id", "history_source_ordinal", name="uq_history_source_message_ordinal"),
+    )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True)
     author_kind: Mapped[str] = mapped_column(String(16), nullable=False, default='legacy', server_default='legacy')
+    author_name: Mapped[str | None] = mapped_column(Text)
     operator_id: Mapped[str | None] = mapped_column(ForeignKey('users.id', ondelete='SET NULL'))
+    history_import_batch_id: Mapped[str | None] = mapped_column(String(36))
+    history_source_ordinal: Mapped[int | None] = mapped_column(Integer)
+    original_timestamp_text: Mapped[str | None] = mapped_column(Text)
     external_id: Mapped[str | None] = mapped_column(String(180), index=True)
     direction: Mapped[str] = mapped_column(String(16), nullable=False)
     kind: Mapped[str] = mapped_column(String(40), nullable=False, default="text")

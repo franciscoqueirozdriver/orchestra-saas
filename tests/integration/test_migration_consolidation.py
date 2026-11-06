@@ -76,7 +76,9 @@ def test_frozen_initial_and_legacy_upgrade_preserve_schema_and_synthetic_data():
         alembic(ROOT, 'upgrade', 'head')
         upgraded = shape(engine)
         with engine.connect() as c:
-            assert c.scalar(text('SELECT version_num FROM alembic_version')) == '0007_search_connection'
+            assert c.scalar(text('SELECT version_num FROM alembic_version')) == '0008_historical_conversations'
+            assert c.scalar(text("SELECT history_only FROM conversations WHERE id='conversation-a'")) is False
+            assert c.scalar(text("SELECT count(*) FROM historical_import_batches")) == 0
             assert c.scalar(text("SELECT count(*) FROM messages WHERE content='synthetic only'")) == 1
             assert c.scalar(text("SELECT last_incoming_at IS NOT NULL FROM conversations WHERE id='conversation-a'"))
             assert c.scalar(text("SELECT is_default FROM llm_configs WHERE id='llm-a'"))
@@ -103,5 +105,29 @@ def test_frozen_initial_and_legacy_upgrade_preserve_schema_and_synthetic_data():
         alembic(ROOT, 'upgrade', 'head')
         assert shape(engine) == upgraded
         alembic(ROOT, 'check')
+    finally:
+        engine.dispose()
+
+
+def test_historical_import_migration_refuses_data_loss_downgrade():
+    if not URL or not BASELINE:
+        pytest.skip('requires isolated PostgreSQL and original source baseline')
+    parsed = make_url(URL)
+    assert parsed.database == 'orchestra_consolidation_test'
+    assert parsed.host in {'orchestra-consolidation-test-db-20261105', 'orchestra-natural-test-db-20261105', '127.0.0.1'}
+    engine = create_engine(URL)
+    try:
+        reset(engine)
+        alembic(ROOT, 'upgrade', 'head')
+        seed(engine)
+        with engine.begin() as c:
+            c.execute(text("INSERT INTO historical_import_batches(id,tenant_id,source_sha256,source_version,source_timezone,message_count) VALUES ('batch-a','tenant-a',repeat('a',64),'test-v1','America/Sao_Paulo',1)"))
+            c.execute(text("INSERT INTO conversation_contact_aliases(id,tenant_id,instance_id,conversation_id,contact_key) VALUES ('alias-a','tenant-a','instance-a','conversation-a','synthetic-phone')"))
+        failed = alembic(ROOT, 'downgrade', '0007_search_connection', success=False)
+        assert 'Downgrade recusado' in failed.stderr
+        with engine.connect() as c:
+            assert c.scalar(text('SELECT version_num FROM alembic_version')) == '0008_historical_conversations'
+            assert c.scalar(text('SELECT count(*) FROM historical_import_batches')) == 1
+            assert c.scalar(text('SELECT count(*) FROM conversation_contact_aliases')) == 1
     finally:
         engine.dispose()

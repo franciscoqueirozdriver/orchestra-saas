@@ -14,7 +14,7 @@ def list_conversations(db: DbSession, tenant_id: TenantId) -> list[dict]:
     result = []
     for row in rows:
         last = db.query(Message).filter(Message.tenant_id == tenant_id, Message.conversation_id == row.id).order_by(Message.created_at.desc()).first()
-        result.append({"id": row.id, "contact_key": row.contact_key, "contact_name": row.contact_name, "status": row.status, "pause_reason": row.pause_reason, "revision": row.revision, "last_message": last.content[:300] if last else "", "last_message_at": row.last_message_at.isoformat() if row.last_message_at else None})
+        result.append({"id": row.id, "contact_key": row.contact_key, "contact_name": row.contact_name, "history_only": row.history_only, "status": row.status, "pause_reason": row.pause_reason, "revision": row.revision, "last_message": last.content[:300] if last else "", "last_message_at": row.last_message_at.isoformat() if row.last_message_at else None})
     return result
 
 
@@ -23,9 +23,9 @@ def list_messages(conversation_id: str, db: DbSession, tenant_id: TenantId) -> l
     conversation = db.query(Conversation).filter(Conversation.id == conversation_id, Conversation.tenant_id == tenant_id).first()
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversa não encontrada")
-    rows = db.query(Message).filter(Message.tenant_id == tenant_id, Message.conversation_id == conversation_id).order_by(Message.created_at.desc(),Message.id.desc()).limit(500).all()
+    rows = db.query(Message).filter(Message.tenant_id == tenant_id, Message.conversation_id == conversation_id).order_by(Message.created_at.desc(),Message.history_import_batch_id.desc().nullslast(),Message.history_source_ordinal.desc().nullslast(),Message.id.desc()).limit(500).all()
     rows.reverse()
-    return [{"id": x.id, "external_id": x.external_id, "direction": x.direction, "author_kind": x.author_kind, "kind": x.kind, "text": x.content, "status": x.status, "created_at": x.created_at.isoformat()} for x in rows]
+    return [{"id": x.id, "external_id": x.external_id, "direction": x.direction, "author_kind": x.author_kind, "author_name": x.author_name, "is_historical": x.history_import_batch_id is not None, "kind": x.kind, "text": x.content, "status": x.status, "created_at": x.created_at.isoformat(), "original_timestamp_text": x.original_timestamp_text} for x in rows]
 
 
 @router.patch("/{conversation_id}/policy")
