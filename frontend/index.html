@@ -4,7 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>Orquestra — Central de agentes</title>
+  <link rel="icon" type="image/png" sizes="512x512" href="/assets/dibberdesk-avatar.png">
+  <meta name="theme-color" content="#f7faf9">
+  <title>diBBerDesk — Atendimento humano no WhatsApp</title>
   <link rel="stylesheet" href="styles.css">
   <script src="llm-ui.js" defer></script>
   <script src="app.js" defer></script>
@@ -13,24 +15,24 @@
   <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
   <main id="login-view" class="login-view">
     <section class="login-card" aria-labelledby="login-title">
-      <a class="brand brand-login" href="#" aria-label="Orquestra início"><span class="brand-mark" aria-hidden="true">O</span><span>Orquestra</span></a>
-      <p class="eyebrow">PLATAFORMA DE ATENDIMENTO</p>
+      <a class="brand brand-login" href="#" aria-label="diBBerDesk início"><img class="brand-wordmark" src="/assets/dibberdesk-wordmark-claro.png" alt="diBBerDesk"></a>
+      <p class="eyebrow">ATENDIMENTO HUMANO NO WHATSAPP</p>
       <h1 id="login-title">Acesse seu espaço</h1>
-      <p class="muted">Entre para gerenciar seus agentes de WhatsApp.</p>
+      <p class="muted">Entre para organizar o atendimento da sua equipe.</p>
       <form id="login-form">
         <label for="login-email">E-mail</label><input id="login-email" name="email" type="email" autocomplete="username" required placeholder="voce@empresa.com">
         <label for="login-password">Senha</label><input id="login-password" name="password" type="password" autocomplete="current-password" required>
         <p id="login-error" class="form-error" role="alert"></p>
         <button class="button button-primary button-full" type="submit">Entrar <span aria-hidden="true">→</span></button>
       </form>
-      <p class="login-foot">Acesso seguro à sua operação.</p>
+      <p class="login-foot">Seu espaço de atendimento, protegido.</p>
     </section>
-    <aside class="login-aside"><div class="aside-orb" aria-hidden="true"></div><p class="eyebrow">CONVERSAS QUE AVANÇAM</p><h2>Atendimento inteligente,<br>com controle de ponta a ponta.</h2><p>Organize agentes, conhecimento e conversas em um único lugar.</p><div class="aside-rule"></div><span>WhatsApp conectado por Z-API</span></aside>
+    <aside class="login-aside"><div class="aside-orb" aria-hidden="true"></div><p class="eyebrow">ATENDIMENTO HUMANO NO WHATSAPP</p><h2>Atendimento com<br>cara de gente.</h2><p>Organize conversas e ajude sua equipe a continuar cada atendimento com contexto.</p><div class="aside-rule"></div><span>Da primeira mensagem à próxima conversa.</span></aside>
   </main>
 
   <div id="app-view" class="app-shell" hidden>
     <aside id="sidebar" class="sidebar">
-      <a class="brand" href="#dashboard" aria-label="Orquestra dashboard"><span class="brand-mark" aria-hidden="true">O</span><span>Orquestra</span></a>
+      <a class="brand" href="#dashboard" aria-label="diBBerDesk início"><img class="brand-wordmark" src="/assets/dibberdesk-wordmark-claro.png" alt="diBBerDesk"></a>
       <div class="workspace"><span class="workspace-icon" aria-hidden="true">▦</span><span><small>ESPAÇO DE TRABALHO</small><strong id="tenant-name">Sua empresa</strong></span></div>
       <nav class="nav" aria-label="Navegação principal">
         <p class="nav-caption">OPERAÇÃO</p>
@@ -47,10 +49,10 @@
       <div class="sidebar-bottom"><div class="connection"><span class="status-dot status-neutral"></span><span>Conexão Z-API<br><small>Verifique em Instâncias</small></span></div><button id="logout-btn" class="logout-button"><span aria-hidden="true">↪</span> Sair da conta</button></div>
     </aside>
     <div class="main-column">
-      <header class="topbar"><button id="menu-toggle" class="icon-button menu-toggle" aria-label="Abrir navegação" aria-expanded="false">☰</button><div class="breadcrumbs"><span>Workspace</span><span aria-hidden="true">/</span><strong id="page-crumb">Visão geral</strong></div><div class="topbar-right"><span class="topbar-indicator"><i class="status-dot status-neutral"></i> Z-API</span><span class="avatar" id="user-avatar" aria-hidden="true">U</span></div></header>
+      <header class="topbar"><button id="menu-toggle" class="icon-button menu-toggle" aria-label="Abrir navegação" aria-expanded="false">☰</button><div class="breadcrumbs"><span>diBBerDesk</span><span aria-hidden="true">/</span><strong id="page-crumb">Visão geral</strong></div><div class="topbar-right"><span class="topbar-indicator"><i class="status-dot status-neutral"></i> WhatsApp</span><span class="avatar" id="user-avatar" aria-hidden="true">U</span></div></header>
       <main id="page-content" class="page-content" tabindex="-1"></main>
     </div>
   </div>
-  <dialog id="modal" class="modal" aria-labelledby="modal-title"><div class="modal-head"><div><p class="eyebrow">ORQUESTRA</p><h2 id="modal-title">Detalhes</h2></div><button class="icon-button" type="button" data-close-modal aria-label="Fechar">×</button></div><div id="modal-body"></div></dialog>
+  <dialog id="modal" class="modal" aria-labelledby="modal-title"><div class="modal-head"><div><p class="eyebrow">DIBBERDESK</p><h2 id="modal-title">Detalhes</h2></div><button class="icon-button" type="button" data-close-modal aria-label="Fechar">×</button></div><div id="modal-body"></div></dialog>
 </body>
 </html>

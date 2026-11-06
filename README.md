@@ -1,6 +1,6 @@
-# Orquestra — SaaS multiempresa para agentes via WhatsApp
+# diBBerDesk — Atendimento humano no WhatsApp
 
-**Nome de trabalho. Versão: MVP alfa, 30/10/2026.** Este repositório contém uma primeira implementação auto-hospedável para Hostinger KVM 2. Ele não é uma plataforma pronta para lançamento comercial sem homologação e revisão de segurança.
+**diBBerDesk. Versão: MVP alfa, 30/10/2026.** Atendimento humano no WhatsApp. Este repositório contém uma primeira implementação auto-hospedável para Hostinger KVM 2. Ele não é uma plataforma pronta para lançamento comercial sem homologação e revisão de segurança.
 
 > **Canal WhatsApp:** Z-API exclusivamente. Nenhuma rota de WhatsApp Cloud API, Twilio, Evolution, Baileys, Venom ou WPPConnect é usada.
 

@@ -11,3 +11,5 @@
 #model-fallback-order li{padding:5px 0;overflow-wrap:anywhere}
 #llm-connection-form details{margin:16px 0}
 #llm-connection-form summary{cursor:pointer;font-weight:600}
+
+.brand-wordmark{display:block;width:100%;max-width:218px;height:auto;object-fit:contain}.brand-login .brand-wordmark{max-width:238px}.sidebar{background:#f7faf9;color:#14142b;border-right:1px solid #e4ecea}.sidebar .brand{color:#14142b}.sidebar .workspace{background:#fff;border-color:#e4ecea}.sidebar .workspace small{color:#6b6a68}.sidebar .workspace strong{color:#14142b}.sidebar .nav-caption{color:#6b6a68}.sidebar .nav a{color:#555a67}.sidebar .nav a span{color:#6b6a68}.sidebar .nav a:hover{background:#e3f5f3;color:#14142b}.sidebar .nav a.active{color:#08645f;background:#e3f5f3;box-shadow:inset 2px 0 #0b7a75}.sidebar .nav a.active span{color:#0b7a75}.sidebar .connection{border-top-color:#e4ecea;color:#14142b}.sidebar .connection small{color:#6b6a68}.sidebar .logout-button{color:#555a67}.sidebar .logout-button:hover{background:#e3f5f3;color:#14142b}
