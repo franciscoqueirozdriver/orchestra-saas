@@ -11,3 +11,5 @@
 Os arquivos aplicados são `frontend/assets/dibberdesk-nome-transparente.png` (1638×460) para a barra lateral, `frontend/assets/dibberdesk-empilhado-transparente.png` (1023×597) para a tela de acesso e `frontend/assets/dibberdesk-avatar.png` (512×512) como ícone do aplicativo. Os arquivos originais completos ficam em `Kit Marca/` e não entram no Git.
 
 A barra lateral usa fundo claro para manter contraste com o wordmark fornecido. O domínio, DNS e certificados permanecem inalterados nesta etapa.
+
+O avatar também é servido como favicon (256 e 512 px), ícone Apple Touch (180 px) e ícones do `frontend/manifest.webmanifest` para atalhos do navegador/celular. Não foi incluída prévia Open Graph: ela depende do domínio definitivo.

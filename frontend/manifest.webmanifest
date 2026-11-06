@@ -1,0 +1,21 @@
+{
+  "name": "diBBerDesk",
+  "short_name": "diBBerDesk",
+  "description": "Atendimento humano no WhatsApp",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7faf9",
+  "theme_color": "#f7faf9",
+  "icons": [
+    {
+      "src": "/assets/dibberdesk-avatar-256.png",
+      "sizes": "256x256",
+      "type": "image/png"
+    },
+    {
+      "src": "/assets/dibberdesk-avatar.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
