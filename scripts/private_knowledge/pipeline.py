@@ -738,7 +738,7 @@ def export_history_for_application(db, company, tenant_id, instance_id, timezone
                     item={'tenant_id':tenant_id,'instance_id':instance_id,'source_sha256':source['sha256'],
                         'source_version':source['version'],'source_timezone':timezone_name,
                         'contact_key':contact_key,'contact_name':display_name,'ordinal':row['ordinal'],
-                        'original_timestamp_text':row['date_raw'],'created_at':created.isoformat(),
+                        'original_timestamp_text':row['date_raw'] or '','created_at':created.isoformat(),
                         'direction':direction,'author_kind':author_kind,'author_name':author_name,
                         'kind':'system' if row['system'] else 'text','content':content,'status':'historical'}
                     stream.write(json.dumps(item,ensure_ascii=False,separators=(',',':'))+'\n')
