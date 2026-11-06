@@ -1,5 +1,6 @@
 from hashlib import sha256
 import json
+import re
 from typing import Any
 
 
@@ -38,6 +39,20 @@ def from_me(payload: dict[str, Any]) -> bool:
 def contact_key(payload: dict[str, Any]) -> str:
     # Preserva LID/identificadores originais quando presentes; sempre vinculado à instância.
     return str(payload.get("chatLid") or payload.get("senderLid") or payload.get("phone") or payload.get("participantLid") or payload.get("participantPhone") or "")[:180]
+
+
+def contact_aliases(payload: dict[str, Any]) -> list[str]:
+    """Return provider identifiers and a normalized phone for continuity across LID/phone events."""
+    values=[]
+    for field in ("chatLid", "senderLid", "phone", "participantLid", "participantPhone"):
+        value=str(payload.get(field) or '').strip()[:180]
+        if value and value not in values:values.append(value)
+    for field in ("phone", "participantPhone"):
+        digits=re.sub(r'\D','',str(payload.get(field) or ''))
+        if len(digits) in {10,11}:digits='55'+digits
+        if digits.startswith('55') and len(digits) in {12,13} and digits not in values:
+            values.append(digits)
+    return values
 
 
 def contact_name(payload: dict[str, Any]) -> str:

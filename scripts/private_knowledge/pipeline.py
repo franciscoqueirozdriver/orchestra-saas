@@ -13,11 +13,13 @@ import tempfile
 import time
 import unicodedata
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 VERSION = 'whatsapp-local-v1'
 REPO = Path(__file__).resolve().parents[2]
 AUDIO = {'.opus', '.ogg', '.mp3', '.m4a', '.wav', '.aac', '.flac'}
 VIDEO = {'.mp4', '.mov', '.mkv', '.webm', '.3gp', '.avi'}
+IMAGE = {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.heic'}
 TEXT = {'.txt', '.md'}
 # Android and iOS exports, day-first date retained verbatim: no guessed timezone/year.
 HEADER = re.compile(r'^\[?(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4},?\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*[APap][Mm])?)\]?\s*(?:-\s*)?(.*)$')
@@ -80,6 +82,28 @@ def normalize_whatsapp_phone(value):
 def normalize_person_name(value):
     value = unicodedata.normalize('NFKD', value or '').encode('ascii', 'ignore').decode().lower()
     return re.sub(r'[^a-z0-9]+', '', value)
+
+
+WHATSAPP_DATE_FORMATS = (
+    '%d/%m/%Y, %H:%M:%S', '%d/%m/%Y %H:%M:%S',
+    '%d/%m/%Y, %H:%M', '%d/%m/%Y %H:%M',
+    '%d/%m/%y, %H:%M:%S', '%d/%m/%y %H:%M:%S',
+    '%d/%m/%y, %H:%M', '%d/%m/%y %H:%M',
+    '%d/%m/%y, %I:%M:%S %p', '%d/%m/%Y, %I:%M:%S %p',
+    '%d/%m/%y %I:%M:%S %p', '%d/%m/%Y %I:%M:%S %p',
+)
+
+
+def parse_whatsapp_datetime(value, timezone_name):
+    """Convert the original local wall time without dropping its source text."""
+    zone = ZoneInfo(timezone_name)
+    for pattern in WHATSAPP_DATE_FORMATS:
+        try:
+            local = datetime.strptime((value or '').strip(), pattern).replace(tzinfo=zone)
+            return local.astimezone(timezone.utc)
+        except ValueError:
+            continue
+    raise ValueError('Data de exportação sem formato reconhecido')
 
 
 def parse_vcards(text):
@@ -279,7 +303,7 @@ def parse_export(text):
 
 def kind(path):
     ext = path.suffix.lower()
-    return 'audio' if ext in AUDIO else 'video' if ext in VIDEO else 'text' if ext in TEXT else 'attachment'
+    return 'audio' if ext in AUDIO else 'video' if ext in VIDEO else 'image' if ext in IMAGE else 'text' if ext in TEXT else 'attachment'
 
 
 def attachment_references(body, source_rows):
@@ -626,6 +650,106 @@ def export_learning_corpus(db, company, output_dir, max_chars=300000):
     return {'saved_private':True,'conversations':len(blocks),'messages':message_count,'files':len(batches)}
 
 
+def export_history_for_application(db, company, tenant_id, instance_id, timezone_name, output):
+    """Create a private JSONL transfer package for an explicit tenant/instance."""
+    if company != tenant_id or company == 'unassigned':
+        raise ValueError('A empresa de staging precisa ser o ID do tenant de destino')
+    if not re.fullmatch(r'[0-9a-fA-F-]{36}', instance_id):
+        raise ValueError('ID da instância inválido')
+    ZoneInfo(timezone_name)
+    output=private_path(output)
+    output.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+    sources=db.execute('''SELECT min(id) id,sha256,min(version) version FROM sources
+        WHERE company=? AND kind='text' AND EXISTS(SELECT 1 FROM messages m WHERE m.source_id=sources.id)
+        GROUP BY sha256 ORDER BY min(id)''',(company,)).fetchall()
+    author_rows={}
+    for source in sources:
+        author_rows[source['id']]=db.execute('''SELECT id,display_name,speaker_role,phone_e164
+            FROM conversation_authors WHERE source_id=? ORDER BY id''',(source['id'],)).fetchall()
+    # No path, basename or conversation body is emitted to progress/stdout.
+    fd=os.open(output,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+    total=0; known_contacts=set(); unresolved=0
+    try:
+        with os.fdopen(fd,'w',encoding='utf-8') as stream:
+            for source in sources:
+                authors=author_rows[source['id']]
+                customers=[a for a in authors if a['speaker_role']=='customer']
+                customer=customers[0] if len(customers)==1 else None
+                phone=customer['phone_e164'] if customer else None
+                display_name=None
+                if phone:
+                    names={r[0] for r in db.execute('''SELECT DISTINCT display_name FROM contact_cards
+                        WHERE company=? AND phone_e164=? AND display_name!='' ''',(company,phone))}
+                    if len(names)==1:display_name=next(iter(names))
+                    known_contacts.add(phone)
+                if not display_name and customer:display_name=customer['display_name']
+                if not display_name:display_name='Histórico sem contato confirmado'
+                contact_key=phone or 'history:'+source['sha256']
+                rows=db.execute('''SELECT m.*,a.display_name author_name,a.speaker_role
+                    FROM messages m LEFT JOIN conversation_authors a ON a.id=m.author_id
+                    WHERE m.source_id=? ORDER BY m.ordinal''',(source['id'],)).fetchall()
+                # One exported system-only line has no source date. Preserve the
+                # line and its ordinal, borrow the nearest dated row only for
+                # chronological display, and keep the original date empty so UI
+                # never presents that borrowed timestamp as an observed fact.
+                parsed_dates=[]
+                for row_index,row in enumerate(rows):
+                    try: parsed_dates.append(parse_whatsapp_datetime(row['date_raw'],timezone_name))
+                    except ValueError:
+                        if (row['date_raw'] or '').strip(): raise
+                        parsed_dates.append(None)
+                for index,value in enumerate(parsed_dates):
+                    if value is None:
+                        parsed_dates[index]=next((x for x in parsed_dates[index+1:] if x is not None),None)
+                        if parsed_dates[index] is None:
+                            parsed_dates[index]=next((x for x in reversed(parsed_dates[:index]) if x is not None),None)
+                        if parsed_dates[index] is None:
+                            raise ValueError('Origem sem nenhuma data para ordenar')
+                for row_index,row in enumerate(rows):
+                    if row['system']:
+                        direction='historical';author_kind='system';author_name='Sistema WhatsApp'
+                    elif row['speaker_role']=='staff':
+                        direction='outgoing';author_kind='operator';author_name=row['author_name'] or row['author']
+                    elif row['speaker_role']=='customer':
+                        direction='incoming';author_kind='user';author_name=row['author_name'] or row['author']
+                    else:
+                        direction='historical';author_kind='legacy';author_name=row['author_name'] or row['author'] or 'Autor não identificado'
+                        unresolved+=1
+                    content=row['body'] or ''
+                    attachments=db.execute('''SELECT a.status,a.source_id,s.kind FROM attachments a
+                        LEFT JOIN sources s ON s.id=a.source_id WHERE a.message_id=? ORDER BY a.reference''',(row['id'],)).fetchall()
+                    for attachment in attachments:
+                        if attachment['status']!='linked' or not attachment['source_id']:
+                            content+='\n[Anexo histórico sem arquivo associado]';continue
+                        media_kind=attachment['kind']
+                        if media_kind in {'audio','video'}:
+                            job=db.execute("SELECT id FROM transcriptions WHERE source_id=? AND status='done' ORDER BY id DESC LIMIT 1",(attachment['source_id'],)).fetchone()
+                            segments=db.execute('SELECT start,end,text FROM segments WHERE transcription_id=? ORDER BY ordinal',(job['id'],)).fetchall() if job else []
+                            if segments:
+                                transcript=' '.join(f"({int(seg['start']//60):02d}:{seg['start']%60:05.2f}) {seg['text']}" for seg in segments)
+                                marker='Áudio' if media_kind=='audio' else 'Áudio extraído do vídeo; imagem não analisada'
+                                content+=f'\n[{marker}; transcrição local automática, falante não identificado, revisão pendente] {transcript}'
+                            elif media_kind=='video':content+='\n[Vídeo sem faixa de áudio; imagem não analisada]'
+                            else:content+='\n[Áudio sem transcrição]'
+                        elif media_kind=='image':content+='\n[Imagem anexada; conteúdo visual não analisado]'
+                        elif media_kind=='attachment':content+='\n[Documento anexado; conteúdo não extraído]'
+                        else:content+='\n[Anexo histórico]'
+                    created=parsed_dates[row_index]
+                    item={'tenant_id':tenant_id,'instance_id':instance_id,'source_sha256':source['sha256'],
+                        'source_version':source['version'],'source_timezone':timezone_name,
+                        'contact_key':contact_key,'contact_name':display_name,'ordinal':row['ordinal'],
+                        'original_timestamp_text':row['date_raw'],'created_at':created.isoformat(),
+                        'direction':direction,'author_kind':author_kind,'author_name':author_name,
+                        'kind':'system' if row['system'] else 'text','content':content,'status':'historical'}
+                    stream.write(json.dumps(item,ensure_ascii=False,separators=(',',':'))+'\n')
+                    total+=1
+    except Exception:
+        output.unlink(missing_ok=True)
+        raise
+    return {'saved_private':True,'source_hashes':len(sources),'messages':total,
+        'known_contacts':len(known_contacts),'unresolved_author_messages':unresolved}
+
+
 def propose(db, company, ids, category, text):
     if category not in {'fact','example'} or not ids or not text.strip():
         raise ValueError('Proposta exige categoria, texto e mensagens de origem')
@@ -672,6 +796,7 @@ def main():
     p=sub.add_parser('classify-authors');p.add_argument('--staff-name',required=True)
     sub.add_parser('identify-phones')
     p=sub.add_parser('export-learning-corpus');p.add_argument('--output-dir',type=Path,required=True);p.add_argument('--max-chars',type=int,default=300000)
+    p=sub.add_parser('export-history-for-application');p.add_argument('--tenant-id',required=True);p.add_argument('--instance-id',required=True);p.add_argument('--timezone',default='America/Sao_Paulo');p.add_argument('--output',type=Path,required=True)
     args=parser.parse_args();os.umask(0o077)
     with connect(args.db) as db:
         if args.command=='ingest':
@@ -691,6 +816,7 @@ def main():
         elif args.command=='classify-authors':result=classify_authors(db,args.company,args.staff_name)
         elif args.command=='identify-phones':result=identify_message_phones(db,args.company)
         elif args.command=='export-learning-corpus':result=export_learning_corpus(db,args.company,args.output_dir,args.max_chars)
+        elif args.command=='export-history-for-application':result=export_history_for_application(db,args.company,args.tenant_id,args.instance_id,args.timezone,args.output)
         else:
             out=private_path(args.output);out.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
             with out.open('x',encoding='utf-8') as stream:json.dump(reconstruct(db,args.company),stream,ensure_ascii=False,indent=2)

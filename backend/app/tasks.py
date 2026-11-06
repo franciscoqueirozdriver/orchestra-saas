@@ -17,9 +17,9 @@ from app.llm_client import LLMError
 from app.locks import tenant_guard, advisory_guard
 from app.model_router import generate_with_fallback, candidate_configs
 from app.policy import is_opt_out, sending_denial, advance_status
-from app.models import Agent, Conversation, KnowledgeChunk, KnowledgeDocument, LLMConfig, MemoryItem, Message, OutboxMessage, WebhookEvent, ZapiInstance
+from app.models import Agent, Conversation, ConversationContactAlias, KnowledgeChunk, KnowledgeDocument, LLMConfig, MemoryItem, Message, OutboxMessage, WebhookEvent, ZapiInstance
 from app.security import decrypt_secret
-from app.zapi_payload import contact_key, from_me
+from app.zapi_payload import contact_aliases, contact_key, from_me
 from app.models import OutboxPart, ConversationTurn
 from app.conversation.service import profile_for, invalidate, action
 from app.conversation.behavior import command, wait_remaining, transition, style_instructions, output_guard, split_reply, aware, is_clarification, CLARIFICATION_LIMIT_REPLY
@@ -112,11 +112,31 @@ def process_webhook_event(event_id):
                 _finalize_event(db, event)
                 return 'own_echo_ignored'
             conversation = db.query(Conversation).filter_by(tenant_id=event.tenant_id, instance_id=event.instance_id, contact_key=contact).first()
+            aliases=contact_aliases(payload)
+            if conversation is None and aliases:
+                matched=db.query(ConversationContactAlias.conversation_id).filter(
+                    ConversationContactAlias.tenant_id==event.tenant_id,
+                    ConversationContactAlias.instance_id==event.instance_id,
+                    ConversationContactAlias.contact_key.in_(aliases)).distinct().all()
+                conversation_ids={row[0] for row in matched}
+                if len(conversation_ids)==1:
+                    conversation=db.query(Conversation).filter_by(tenant_id=event.tenant_id,id=next(iter(conversation_ids))).first()
             if conversation is None:
                 conversation = Conversation(tenant_id=event.tenant_id, instance_id=event.instance_id, contact_key=contact,
                                             contact_name=str(payload.get('senderName') or payload.get('chatName') or '')[:180], status='open')
                 db.add(conversation)
                 db.flush()
+            elif not conversation.contact_name:
+                conversation.contact_name=str(payload.get('senderName') or payload.get('chatName') or '')[:180]
+            for alias_key in aliases:
+                known=db.query(ConversationContactAlias).filter_by(tenant_id=event.tenant_id,
+                    instance_id=event.instance_id,contact_key=alias_key).first()
+                if known is None:
+                    db.add(ConversationContactAlias(tenant_id=event.tenant_id,instance_id=event.instance_id,
+                        conversation_id=conversation.id,contact_key=alias_key))
+            if conversation.history_only:
+                conversation.history_only=False
+                if conversation.status=='historical':conversation.status='open'
             direction = 'outgoing' if own else 'incoming'
             existing = db.query(Message).filter_by(tenant_id=event.tenant_id, conversation_id=conversation.id,
                                                    external_id=event.event_key, direction=direction).first()
@@ -171,7 +191,8 @@ def _build_context(db, agent, conversation, configs, revision=None):
     messages = db.query(Message).filter_by(tenant_id=agent.tenant_id, conversation_id=conversation.id).order_by(
         Message.created_at.desc(), Message.id.desc()).limit(settings.model_history_limit).all()
     messages.reverse()
-    history = [{'role': 'user' if m.direction == 'incoming' else 'assistant', 'content': m.content[:6000]} for m in messages if m.content]
+    usable_messages=[m for m in messages if m.history_import_batch_id is None or m.author_kind in {'user','operator'}]
+    history = [{'role': 'user' if m.direction == 'incoming' else 'assistant', 'content': m.content[:6000]} for m in usable_messages if m.content]
     profile=profile_for(agent)
     turn_state={}
     query_text=next((m.content for m in reversed(messages) if m.direction=='incoming' and m.kind=='text'),'')
@@ -198,7 +219,9 @@ def _build_context(db, agent, conversation, configs, revision=None):
         valid=conversation.context_expires_at and aware(conversation.context_expires_at)>datetime.now(timezone.utc)
         history=[{'role':'user' if m.direction=='incoming' else 'assistant',
                   'content':('[Mensagem de operador] ' if m.author_kind=='operator' else '')+m.content[:6000]}
-                 for m in messages if m.id not in included and valid and aware(m.created_at)>=datetime.now(timezone.utc)-timedelta(minutes=profile.context_minutes)]
+                 for m in usable_messages if m.id not in included and (
+                     m.history_import_batch_id is not None or
+                     (valid and aware(m.created_at)>=datetime.now(timezone.utc)-timedelta(minutes=profile.context_minutes)))]
         history.append({'role':'user','content':query_text})
     context = []
     now = datetime.now(timezone.utc)

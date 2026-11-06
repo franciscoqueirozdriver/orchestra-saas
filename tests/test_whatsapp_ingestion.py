@@ -77,6 +77,36 @@ def test_reconstructed_transcript_keeps_origin_timestamps(db,tmp_path):
     assert rows[1]['author']=='Outra pessoa'
 
 
+def test_application_history_export_keeps_order_authors_and_local_transcript(db,tmp_path):
+    root=tmp_path/'exports';root.mkdir()
+    (root/'voice.opus').write_bytes(b'local-audio-fixture')
+    (root/'chat.txt').write_text(
+        '[05/11/2026, 10:00:00] +55 11 91234-5678: Olá\n'
+        '[05/11/2026, 10:01:00] Atendimento: <anexado: voice.opus>\n'
+        '05/11/2026 10:02 - aviso do sistema\n',encoding='utf-8')
+    company='c7de12ea-ba0e-40b1-a555-17fc0808e87e'
+    p.ingest(db,root,company)
+    p.classify_authors(db,company,'Atendimento')
+    source_id=db.execute("SELECT id FROM sources WHERE kind='audio'").fetchone()[0]
+    job=db.execute("INSERT INTO transcriptions(source_id,recipe,status) VALUES(?,'local-v1','done')",(source_id,)).lastrowid
+    db.execute('INSERT INTO segments VALUES(?,0,1.0,2.5,?,NULL,NULL)',(job,'fala sintética'))
+    # Missing export timestamp is retained as missing while ordinal remains usable.
+    db.execute("UPDATE messages SET date_raw='' WHERE system=1")
+    db.commit()
+    output=tmp_path/'private'/'history.jsonl'
+    result=p.export_history_for_application(db,company,company,'ced25f47-c5b8-4782-be2f-7a41216a703d','America/Sao_Paulo',output)
+    import json
+    rows=[json.loads(line) for line in output.read_text(encoding='utf-8').splitlines()]
+    assert result['messages']==3
+    assert [row['ordinal'] for row in rows]==[0,1,2]
+    assert rows[0]['direction']=='incoming' and rows[0]['author_kind']=='user'
+    assert rows[1]['direction']=='outgoing' and rows[1]['author_kind']=='operator'
+    assert 'fala sintética' in rows[1]['content']
+    assert rows[2]['author_kind']=='system' and rows[2]['original_timestamp_text']==''
+    assert rows[2]['created_at']==rows[1]['created_at']
+    assert output.stat().st_mode & 0o777==0o600
+
+
 def test_proposal_redaction_pending_review_and_no_publish(db,tmp_path):
     p.ingest(db,export(tmp_path/'exports'),'a')
     mid=db.execute('SELECT id FROM messages ORDER BY id').fetchone()[0]
