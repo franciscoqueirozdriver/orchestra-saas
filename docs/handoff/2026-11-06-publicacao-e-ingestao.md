@@ -233,89 +233,81 @@ recibos/backup. Não registrar nomes de clientes, números, trechos de mensagens
 transcrições, conteúdo de VCF, tokens, chaves, passphrases ou valores de `.env`.
 Atualizar o handoff quando houver mudança de estado; preservar os números como
 histórico datado, sem tratá-los como estado atual após nova ingestão ou deploy.
-# Atualização — mensagens agora como histórico de conversas
+# Atualização final — histórico de mensagens importado
 
-## Estado desta implementação
+## Estado e localização no produto
 
 O entendimento anterior de que o staging privado bastava não atendia ao objetivo:
-mensagens para atendimento precisam ser consultáveis na aplicação e precisam
-continuar compondo o histórico do contato. Foi implementado o fluxo de publicação
-para **Conversas**. O commit `db66dde71dd4c85304632e65a3d9c8849599670f` está na branch
-`feature/importar-historico-whatsapp`, PR #7. O CI do push passou em Python 3.12,
-PostgreSQL descartável, build Docker e UI sintética; o CI da PR ainda executa.
+mensagens de atendimento precisam estar consultáveis na aplicação e compor o
+histórico do contato. O fluxo foi integrado e publicado. O SHA final é
+`1dbd44a7e903b8fd6529dc78e53b4a548d6baea8`; PR #7 implementou a funcionalidade e PR
+#8 corrigiu a serialização de data ausente. Ambas foram mescladas; os checks de CI
+passaram em Python 3.12, PostgreSQL descartável, build Docker e UI sintética.
 
-### Localização no produto
+Para encontrar as mensagens, abra `https://app.salex.tech`, entre na empresa
+Climatiza Brasil, clique em **Conversas** e selecione a pessoa. A linha do tempo
+mostra autor, direção, data textual original e a indicação **Histórico**. Uma
+mensagem sem data original aparece como **Data ausente no arquivo**, mantendo sua
+ordem relativa dentro da exportação. O maior diálogo tem 434 mensagens e cabe no
+limite de 500 mensagens retornadas pelo endpoint atual.
 
-Após publicar a migration 0008 e importar o pacote, a equipe entra em **Conversas**,
-seleciona o nome da pessoa/conversa e vê a linha do tempo. Cada mensagem mantém o
-autor identificado, direção, indicação de histórico e texto original da data. Uma
-mensagem sem data de origem aparece como **Data ausente no arquivo**, preservando a
-ordem original. O endpoint entrega até 500 mensagens por conversa; o pacote validado
-tem máximo de 434 em cada uma.
+Mensagens históricas de cliente e equipe entram no contexto recente enviado ao
+provedor configurado quando chegar uma nova mensagem daquela conversa. Autores não
+confirmados e eventos de sistema ficam visíveis na tela, mas não são enviados como
+fala humana ao modelo. A importação em si não chamou provedores externos. O histórico
+não foi indexado como fato/regra na busca de conhecimento.
 
-Mensagens históricas do cliente e do atendente entram no contexto recente do agente
-quando houver nova mensagem na mesma conversa. A seleção respeita o limite de
-histórico do agente; autores não confirmados e eventos de sistema aparecem na tela,
-mas não são passados como fala de cliente/equipe ao modelo. Isso trata o histórico
-como conversa e contexto; não publica suas frases como fatos/regras na busca de
-conhecimento.
+## Resultado agregado da importação
 
-### Pacote de transferência validado
+O pacote de transferência permaneceu privado no computador. Ele foi transmitido
+pela entrada padrão diretamente à API e não foi salvo no Git ou no checkout da VPS.
+Cópias idênticas de arquivos foram deduplicadas por SHA-256; mensagens individuais
+não foram removidas por semelhança. Totais confirmados no banco da empresa:
 
-O conteúdo permanece no computador e fora do Git. O exportador gerou um JSONL
-privado, modo `0600`, para a empresa `c7de12ea-ba0e-40b1-a555-17fc0808e87e` e a
-instância vinculada. Resumo agregado, sem conteúdo pessoal:
-
-- 7.934 mensagens de 59 fontes com mensagens, reunidas em 58 conversas.
-- Cópias idênticas do mesmo arquivo são deduplicadas por SHA-256; nenhum conteúdo
-  de mensagem é deduplicado individualmente.
-- 4.114 mensagens de equipe, 3.550 de clientes, 213 eventos de sistema e 57
+- 59 lotes de origem e 7.934 mensagens em 58 conversas históricas.
+- 4.114 mensagens da equipe, 3.550 de clientes, 213 eventos de sistema e 57
   mensagens com autor não confirmado.
-- 21 contatos têm telefone classificado. Os demais permanecem como conversa
-  histórica isolada e não são unidos por nome ou semelhança.
-- A maior conversa tem 434 mensagens. Uma mensagem não tinha data na exportação;
-  a UI a identifica como tal e a ordem por ordinal é mantida.
-- Transcrições locais de áudio seguem no contexto da mensagem com timestamps e
-  marca de revisão pendente. Imagens e documentos entram como marcadores; seis
-  vídeos não tinham áudio. Nenhuma imagem de vídeo foi interpretada.
+- 21 aliases de telefone classificados; demais conversas continuam isoladas, sem
+  associação por nome.
+- Uma data não existia na exportação e é mostrada como ausente.
+- Transcrições locais de áudio foram inseridas na mensagem como automáticas e
+  pendentes de revisão. Anexos de imagem/documento têm marcadores; vídeo não teve
+  interpretação visual.
 
-### Schema, segurança e operação
+A segunda execução de dry-run encontrou 59 fontes já importadas, zero fontes
+pendentes e zero conversas novas, confirmando idempotência. O primeiro dry-run foi
+recusado antes de qualquer gravação porque uma data nula não estava serializada como
+texto vazio; a correção foi validada em PR #8 e o pacote foi regenerado antes da
+transação definitiva.
+
+## Schema, estado de envio e backup
 
 Migration `0008_historical_conversations` adiciona proveniência por lote/hash,
-`history_only`, aliases de contato e campos de autor/ordem/data. O importador lê o
-JSONL pela entrada padrão, faz validação em dry-run por padrão e grava toda a carga
-pendente numa transação. Uma repetição não duplica fontes. A migration recusa
-downgrade quando há lotes/aliases para não apagar histórico.
+`history_only`, aliases de contato e campos de autor/ordem/data. Conversas importadas
+permanecem com `history_only=true` e consentimento `unknown`; isso não libera envio.
+`OUTBOUND_ENABLED=false` foi confirmado após o deploy. A migration recusa downgrade
+quando há lotes/aliases, para não apagar histórico.
 
-Histórico importado fica inicialmente com `history_only=true` e consentimento
-`unknown`; isso não habilita envio. Uma futura mensagem recebida pode casar aliases
-de telefone e LID e abrir a conversa existente. Saída global deve continuar
-suspensa (`OUTBOUND_ENABLED=false`). Conteúdo e pacote não devem aparecer em logs,
-artefatos CI, imagens Docker, PR, backups desprotegidos ou documentação.
+O checkout da VPS e a `main` local/GitHub estão no SHA
+`1dbd44a7e903b8fd6529dc78e53b4a548d6baea8`. O banco está em
+`0008_historical_conversations`; HTTPS, API, worker, scheduler e web foram
+confirmados saudáveis. Recibo do release: `~/orchestra-releases/20261106T042637Z/receipt.json`.
 
-### Próximos passos operacionais autorizados
+O backup criptografado e checksum correspondem ao release e foram validados por
+streaming: `pg_restore --list` para o dump, `tar -tzf` para os dados e `sha256sum -c`
+para ambos. Estão em
+`~/orchestra-preservacao/publicacao-20261105T214148Z/operational-backups`. Cópia
+externa ainda não confirmada; preserve a passphrase separada da VPS. Não faça
+downgrade nem restaure o banco para reverter código; preserve schema e dados de
+histórico.
 
-1. Aguardar CI da PR #7 e integrar o SHA revisado em `main`.
-2. No computador, preservar o pacote privado recém-gerado; não recriá-lo no caminho
-   de saída já existente, pois o exportador recusa sobrescrita.
-3. Na VPS, conferir checkout sem alterações/arquivos novos, commit, imagens e revisão
-   Alembic. Confirmar com backup protegido e legível antes de aplicar schema.
-4. Executar a conferência de release com SHA completo. A revisão esperada é
-   `0007_search_connection`; aplicar `0008_historical_conversations` somente pelo
-   helper de release com `--allow-schema-change`.
-5. Validar saúde, versão do banco, serviço web/API/worker e que saída global segue
-   suspensa.
-6. Transferir o JSONL privadamente à entrada do contêiner API, executar primeiro
-   dry-run e conferir apenas os agregados. Só então aplicar. Não escrever o pacote
-   em `/opt/orquestra`, Git, shell history ou logs.
-7. Validar totais por tenant/instância e amostras sintéticas de tela sem copiar
-   mensagens pessoais para relatórios. Abrir **Conversas** e confirmar timeline.
-8. Manter backup e SHA anterior para reversão de código. Migration com histórico
-   importado não admite downgrade; reversão deve restaurar código compatível e
-   preservar schema/dados. Não restaurar banco sem decisão explícita.
+## Privacidade e separação de conhecimento
 
-Este adendo substitui afirmações anteriores deste handoff de que “a ponte e a
-importação no histórico de produção não foram implementadas” e de que todas as
-mensagens ficariam somente no staging. Até a publicação e importação descritas acima,
-as mensagens continuam privadas no computador e não são visíveis na VPS.
+`docs/Conversas/`, mídias, SQLite de staging, transcrições completas e JSONL de
+transferência continuam privados no computador. O arquivo
+`docs/conhecimento/base-atendimento-climatiza-brasil.md` também permanece não
+rastreado. Apenas código, migration, testes sintéticos e documentação sem conteúdo
+pessoal foram publicados. Mensagens históricas não viram automaticamente regra,
+preço atual ou instrução do agente. Conhecimento factual aprovado exige fluxo
+separado de revisão e publicação.
 
