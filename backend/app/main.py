@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 settings.ensure_runtime_secrets()
 
 app = FastAPI(
-    title="diBBerDesk API",
+    title="Orquestra SaaS API",
     version="0.1.0",
     docs_url="/api/docs" if settings.environment != "production" else None,
     redoc_url=None,

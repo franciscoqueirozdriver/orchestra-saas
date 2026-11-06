@@ -17,7 +17,7 @@
   }
   function setLoggedIn(on){$('#login-view').hidden=on;$('#app-view').hidden=!on;if(on){$('#tenant-name').textContent=state.tenant||'Seu espaço';$('#tenants-nav').hidden=state.role!=='platform_admin';$('#user-avatar').textContent=(state.tenant||'U').trim().charAt(0).toUpperCase();}}
   function loading(){return '<div class="loading"><span class="spinner" aria-hidden="true"></span>Carregando dados…</div>';}
-  function pageHead(title,subtitle,action=''){return `<div class="page-head"><div><p class="eyebrow">ATENDIMENTO HUMANO NO WHATSAPP</p><h1>${esc(title)}</h1><p>${esc(subtitle)}</p></div>${action}</div>`;}
+  function pageHead(title,subtitle,action=''){return `<div class="page-head"><div><p class="eyebrow">CENTRAL DE OPERAÇÃO</p><h1>${esc(title)}</h1><p>${esc(subtitle)}</p></div>${action}</div>`;}
   function empty(title,desc,action=''){return `<div class="empty-state"><div class="empty-icon" aria-hidden="true">◇</div><h3>${esc(title)}</h3><p>${esc(desc)}</p>${action}</div>`;}
   function errorBox(err){return `<div class="inline-alert" role="alert"><strong>Não foi possível carregar.</strong> ${esc(err.message||err)}. Confira a API e tente novamente.</div><button class="button button-secondary" data-retry>↻ Tentar novamente</button>`;}
   function notice(){return `<div class="notice"><span class="notice-icon" aria-hidden="true">ⓘ</span><div><strong>Z-API exclusiva; auto-resposta fica desligada até configuração e ativação</strong>A conexão com WhatsApp usa somente Z-API. Ative respostas automáticas explicitamente nas configurações do agente.</div></div>`;}
