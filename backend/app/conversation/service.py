@@ -23,7 +23,7 @@ def action(db, conversation, action_name, operator_id=None):
     if action_name=='resume':
         conversation.status='open';conversation.pause_reason=None
     else:
-        conversation.status='human' if action_name in {'takeover','human_requested'} else 'paused'
+        conversation.status='human' if action_name in {'takeover','human_requested','intervention_requested'} else 'paused'
         conversation.pause_reason=action_name
     conversation.turn_started_at=None
     # Resume requires a fresh inbound; don't regenerate the question a human already answered.

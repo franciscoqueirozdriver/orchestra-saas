@@ -19,7 +19,8 @@ from app.model_router import generate_with_fallback, candidate_configs
 from app.policy import is_opt_out, sending_denial, advance_status
 from app.models import Agent, Conversation, ConversationContactAlias, KnowledgeChunk, KnowledgeDocument, LLMConfig, MemoryItem, Message, OutboxMessage, WebhookEvent, ZapiInstance
 from app.security import decrypt_secret
-from app.zapi_payload import contact_aliases, contact_key, from_me
+from app.zapi_payload import contact_aliases, contact_key, from_me, classify
+from app.interventions import create_request, send_group_alert, private_claim, send_claim_reply, CLAIM_COMMAND
 from app.models import OutboxPart, ConversationTurn
 from app.conversation.service import profile_for, invalidate, action
 from app.conversation.behavior import command, wait_remaining, transition, style_instructions, output_guard, split_reply, aware, is_clarification, CLARIFICATION_LIMIT_REPLY
@@ -100,8 +101,20 @@ def process_webhook_event(event_id):
                 return _process_operational_event(db, event)
             payload = event.payload
             if _is_true(payload.get('isGroup')):
+                event.payload={}
                 _finalize_event(db, event)
                 return 'group_ignored'
+            classified_kind,classified_content=classify(payload)
+            incoming_kind=str(payload.get('normalizedKind') or classified_kind)
+            incoming_content=str(payload.get('normalizedText') or classified_content or '')[:12000]
+            if incoming_kind=='text' and not from_me(payload) and CLAIM_COMMAND.fullmatch(incoming_content or ''):
+                staff_instance=db.query(ZapiInstance).filter_by(id=event.instance_id,tenant_id=event.tenant_id).first()
+                result=private_claim(db,staff_instance,payload) if staff_instance else {'status':'unknown','phone':''}
+                send_claim_reply(staff_instance,result.get('phone',''),result)
+                db.commit()
+                event.payload={}
+                _finalize_event(db,event)
+                return 'intervention_'+result['status']
             contact = contact_key(payload).strip()
             if not contact:
                 _finalize_event(db, event, error='invalid_contact')
@@ -140,8 +153,10 @@ def process_webhook_event(event_id):
             direction = 'outgoing' if own else 'incoming'
             existing = db.query(Message).filter_by(tenant_id=event.tenant_id, conversation_id=conversation.id,
                                                    external_id=event.event_key, direction=direction).first()
-            kind = str(payload.get('normalizedKind') or 'unknown')[:40]
-            content = str(payload.get('normalizedText') or '')[:12000]
+            kind = str(payload.get('normalizedKind') or incoming_kind or 'unknown')[:40]
+            content = str(payload.get('normalizedText') or incoming_content or '')[:12000]
+            intervention_ticket=None
+            intervention_created=False
             if not existing:
                 received_now=datetime.now(timezone.utc)
                 db.add(Message(tenant_id=event.tenant_id, conversation_id=conversation.id, external_id=event.event_key,
@@ -157,20 +172,26 @@ def process_webhook_event(event_id):
                     instance=db.query(ZapiInstance).filter_by(id=event.instance_id,tenant_id=event.tenant_id).first()
                     agent=db.query(Agent).filter_by(id=instance.agent_id,tenant_id=event.tenant_id).first() if instance and instance.agent_id else None
                     profile=profile_for(agent)
+                    requested=command(content) if kind=='text' else None
                     if profile.enabled:
                         if conversation.pause_reason=='customer_cancel':
                             conversation.status='open';conversation.pause_reason=None
                         if not conversation.turn_started_at:conversation.turn_started_at=conversation.last_incoming_at
-                        requested=command(content) if kind=='text' else None
-                        if requested:
-                            action(db,conversation,'human_requested' if requested=='human' else 'customer_cancel')
+                    if requested and (requested=='human' or profile.enabled):
+                        action(db,conversation,'human_requested' if requested=='human' else 'customer_cancel')
+                        if requested=='human':
+                            intervention_ticket,intervention_created=create_request(db,instance,conversation,'pedido explícito do cliente')
                     if kind == 'text' and is_opt_out(content):
                         conversation.opted_out, conversation.consent_status = True, 'denied'
                         conversation.consent_evidence = 'opt_out_incoming_message:' + event.event_key
                 db.commit()
-                if not own and profile.enabled and kind=='text' and command(content)=='human' and not conversation.opted_out:
+                if not own and kind=='text' and command(content)=='human' and not conversation.opted_out:
                     from app.outbox import enqueue
-                    enqueue(db,instance,conversation,'O atendimento automático foi pausado a seu pedido. Não tenho confirmação de disponibilidade de um atendente.',idempotency_key='control:'+event.id,author_kind='system')
+                    notified=(send_group_alert(db,instance,intervention_ticket) if intervention_created else
+                              bool(intervention_ticket and intervention_ticket.notification_status=='sent'))
+                    notice=('A automação foi pausada. A equipe recebeu o pedido e pode assumir pelo código '+intervention_ticket.code+'.'
+                        if notified else 'A automação foi pausada. O grupo de atendimento humano não está configurado ou o alerta ainda não foi confirmado.')
+                    enqueue(db,instance,conversation,notice,idempotency_key='control:'+event.id,author_kind='system')
             if own or conversation.opted_out or conversation.status!='open':
                 _finalize_event(db, event)
                 return 'stored_no_auto_reply'
@@ -247,6 +268,28 @@ def _build_context(db, agent, conversation, configs, revision=None):
     return agent.system_prompt.strip() + '\n' + guardrail + '\n' + '\n'.join(context), history
 
 
+def _escalate_after_automation_failure(db,tenant_id,conversation_id,revision,reason):
+    with tenant_guard(tenant_id):
+        db.expire_all()
+        conversation=db.query(Conversation).filter_by(id=conversation_id,tenant_id=tenant_id).first()
+        if not conversation or conversation.revision!=revision or conversation.status!='open':
+            return 'stale_response'
+        if conversation.opted_out:
+            return 'opted_out'
+        instance=db.query(ZapiInstance).filter_by(id=conversation.instance_id,tenant_id=tenant_id).first()
+        if not instance:
+            return 'instance_missing'
+        action(db,conversation,'intervention_requested')
+        ticket,created=create_request(db,instance,conversation,reason)
+        db.commit()
+        notified=(send_group_alert(db,instance,ticket) if created else ticket.notification_status=='sent')
+        notice=(f'Não consegui concluir sua solicitação com segurança. A automação foi pausada e a equipe recebeu o pedido, código {ticket.code}.'
+            if notified else 'Não consegui concluir sua solicitação com segurança. A automação foi pausada, mas o grupo da equipe ainda não está validado ou não recebeu o alerta.')
+        from app.outbox import enqueue
+        enqueue(db,instance,conversation,notice,idempotency_key=f'intervention:{ticket.id}',author_kind='system')
+        return 'intervention_requested'
+
+
 @celery_app.task(name='app.tasks.respond_to_conversation')
 def respond_to_conversation(tenant_id, conversation_id, expected_revision):
     if not settings.outbound_enabled:
@@ -291,7 +334,7 @@ def respond_to_conversation(tenant_id, conversation_id, expected_revision):
             turn=db.query(ConversationTurn).filter_by(tenant_id=tenant_id,conversation_id=conversation_id,revision=expected_revision).first() if profile.enabled else None
             if profile.enabled:answer=output_guard(answer,turn.state if turn else {})
             if not answer or (not profile.enabled and len(answer)>4000):
-                return 'empty_or_oversized_output'
+                return _escalate_after_automation_failure(db,tenant_id,conversation_id,expected_revision,'resposta vazia ou inválida da automação')
             with tenant_guard(tenant_id):
                 db.expire_all()
                 conversation = db.query(Conversation).filter_by(id=conversation_id, tenant_id=tenant_id).first()
@@ -302,6 +345,15 @@ def respond_to_conversation(tenant_id, conversation_id, expected_revision):
                 if not active_agent:
                     return 'agent_disabled'
                 from app.outbox import enqueue
+                if profile.enabled and answer==CLARIFICATION_LIMIT_REPLY:
+                    action(db,conversation,'intervention_requested')
+                    ticket,created=create_request(db,instance,conversation,'pedido não resolvido após tentativas')
+                    db.commit()
+                    notified=(send_group_alert(db,instance,ticket) if created else ticket.notification_status=='sent')
+                    notice=('Não consegui resolver com segurança. A automação foi pausada e a equipe recebeu o pedido, código '+ticket.code+'.'
+                        if notified else 'Não consegui resolver com segurança. A automação foi pausada, mas o grupo da equipe ainda não está validado ou não recebeu o alerta.')
+                    enqueue(db,instance,conversation,notice,idempotency_key=f'intervention:{ticket.id}',author_kind='system')
+                    return 'intervention_requested'
                 if profile.enabled:
                     conversation.context_state={**turn.state,
                         "clarifications":1 if is_clarification(answer) or answer==CLARIFICATION_LIMIT_REPLY else 0,
@@ -314,10 +366,10 @@ def respond_to_conversation(tenant_id, conversation_id, expected_revision):
                 return 'reply_queued'
         except ValueError:
             logger.warning('Geração não concluída (invalid_output)')
-            return 'invalid_output'
+            return _escalate_after_automation_failure(db,tenant_id,conversation_id,expected_revision,'resposta inválida da automação')
         except LLMError as exc:
             logger.warning('Geração não concluída (%s)', exc.category)
-            return 'provider_error_pending_recovery'
+            return _escalate_after_automation_failure(db,tenant_id,conversation_id,expected_revision,'falha do provedor de IA')
         finally:
             db.close()
 

@@ -58,6 +58,7 @@ class AgentUpdate(BaseModel):
 
 
 class ZapiInstanceCreate(BaseModel):
+    provider: str = Field(default='zapi',pattern=r'^zapi$')
     label: str = Field(min_length=2, max_length=120)
     instance_id: str = Field(min_length=3, max_length=160, pattern=r"^[A-Za-z0-9_-]+$")
     token: str = Field(min_length=4, max_length=512)
@@ -136,6 +137,57 @@ class InstancePolicyUpdate(BaseModel):
     agent_id: str | None = None
     sending_enabled: bool | None = None
     messages_per_minute: int | None = Field(default=None, ge=1, le=60)
+
+
+class InterventionRoutingUpdate(BaseModel):
+    group_id: str = Field(min_length=5, max_length=240, pattern=r"^[A-Za-z0-9@._-]+$")
+    staff_phones: list[str] = Field(min_length=1, max_length=100)
+
+    @field_validator('staff_phones')
+    @classmethod
+    def normalize_staff_phones(cls, values):
+        normalized=[]
+        for value in values:
+            digits=''.join(ch for ch in value if ch.isdigit())
+            if not 10 <= len(digits) <= 15:
+                raise ValueError('Cada atendente deve ter um telefone internacional com 10 a 15 dígitos')
+            if digits not in normalized:
+                normalized.append(digits)
+        if not normalized:
+            raise ValueError('Cadastre ao menos um telefone de atendente autorizado')
+        return normalized
+
+
+class InterventionGroupCreate(BaseModel):
+    group_name: str = Field(min_length=2,max_length=120)
+    phones: list[str] = Field(min_length=1,max_length=100)
+    auto_invite: bool = False
+    confirmed_not_connected_number: bool
+    confirm_auto_invites: bool = False
+
+    @field_validator('phones')
+    @classmethod
+    def normalize_group_phones(cls, values):
+        normalized=[]
+        for value in values:
+            digits=''.join(ch for ch in value if ch.isdigit())
+            if not 10 <= len(digits) <= 15:
+                raise ValueError('Cada participante deve ter um telefone internacional com 10 a 15 dígitos')
+            if digits not in normalized:
+                normalized.append(digits)
+        if not normalized:
+            raise ValueError('Informe ao menos um participante')
+        return normalized
+
+    @model_validator(mode='after')
+    def confirm_private_invites(self):
+        if self.auto_invite and not self.confirm_auto_invites:
+            raise ValueError('Confirme que deseja enviar convites privados para quem não puder ser adicionado diretamente')
+        return self
+
+
+class InterventionGroupConfirmation(BaseModel):
+    confirmed_received: bool
 
 
 class ConversationPolicyUpdate(BaseModel):

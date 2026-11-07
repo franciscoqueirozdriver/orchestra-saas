@@ -8,11 +8,12 @@ from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
 from app.dependencies import CurrentUser, DbSession, TenantId
-from app.models import Agent, Conversation, Message, OutboxMessage, User, ZapiInstance
-from app.schemas import SendTextRequest, ZapiInstanceCreate, InstancePolicyUpdate
+from app.models import Agent, Conversation, Message, OutboxMessage, User, ZapiInstance, InterventionRequest
+from app.schemas import SendTextRequest, ZapiInstanceCreate, InstancePolicyUpdate, InterventionRoutingUpdate, InterventionGroupCreate, InterventionGroupConfirmation
 from app.security import callback_secret_matches, decrypt_secret, encrypt_secret, hash_callback_secret
 from app.zapi_client import ZapiClient, ZapiError
 from app.zapi_payload import classify, contact_key, contact_name, event_key
+from app.interventions import group_client
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["Z-API"])
@@ -26,7 +27,7 @@ def _require_admin(user: User) -> None:
 def _get_instance(db, tenant_id: str, internal_id: str) -> ZapiInstance:
     row = db.query(ZapiInstance).filter(ZapiInstance.id == internal_id, ZapiInstance.tenant_id == tenant_id, ZapiInstance.is_active.is_(True)).first()
     if row is None:
-        raise HTTPException(status_code=404, detail="Instância não encontrada")
+        raise HTTPException(status_code=404, detail="Conexão não encontrada")
     return row
 
 
@@ -34,8 +35,17 @@ def _client(row: ZapiInstance) -> ZapiClient:
     return ZapiClient(row.instance_id, decrypt_secret(row.token_encrypted) or "", decrypt_secret(row.client_token_encrypted))
 
 
+def _connection_profile(provider: str) -> dict:
+    # Rótulos de tela não usam nome de fornecedor. Novos conectores entram aqui.
+    profiles = {
+        "zapi": {"connection_label": "WhatsApp via API", "can_create_group": True},
+    }
+    return profiles.get(provider, {"connection_label": "WhatsApp via API", "can_create_group": False})
+
+
 def _instance_read(row: ZapiInstance) -> dict:
-    return {"id": row.id, "label": row.label, "instance_id": row.instance_id, "status": row.status, "agent_id":row.agent_id, "global_sending_enabled":settings.outbound_enabled, "sending_enabled":row.sending_enabled, "messages_per_minute":row.messages_per_minute, "webhook_configured": row.webhook_configured, "credentials_configured": True, "created_at": row.created_at.isoformat()}
+    profile = _connection_profile(row.provider)
+    return {"id": row.id, "provider": row.provider, "connection_label": profile["connection_label"], "can_create_group": profile["can_create_group"], "label": row.label, "instance_id": row.instance_id, "status": row.status, "agent_id":row.agent_id, "global_sending_enabled":settings.outbound_enabled, "sending_enabled":row.sending_enabled, "messages_per_minute":row.messages_per_minute, "webhook_configured": row.webhook_configured, "credentials_configured": True, "created_at": row.created_at.isoformat()}
 
 
 @router.get("/zapi/instances")
@@ -51,6 +61,7 @@ def create_instance(payload: ZapiInstanceCreate, request: Request, db: DbSession
     callback_token = secrets.token_urlsafe(36)
     row = ZapiInstance(
         tenant_id=tenant_id,
+        provider=payload.provider,
         label=payload.label.strip(),
         instance_id=payload.instance_id.strip(),
         token_encrypted=encrypt_secret(payload.token) or "",
@@ -63,7 +74,7 @@ def create_instance(payload: ZapiInstanceCreate, request: Request, db: DbSession
         db.commit()
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=409, detail="Essa instância Z-API já está vinculada à plataforma") from exc
+        raise HTTPException(status_code=409, detail="Essa conexão já está vinculada à plataforma") from exc
     db.refresh(row)
 
     public_base = settings.public_base_url
@@ -78,7 +89,7 @@ def create_instance(payload: ZapiInstanceCreate, request: Request, db: DbSession
             webhook_configured = True
         except (ZapiError, ValueError):
             # Mostrar a URL uma única vez para configuração manual; segredos não são gravados nos logs.
-            callback_message = "Não foi possível confirmar a configuração remota; a URL pode ser cadastrada manualmente no painel Z-API."
+            callback_message = "Não foi possível confirmar a configuração remota; a URL pode ser cadastrada manualmente no painel do provedor."
     row.webhook_configured = webhook_configured
     db.commit()
     result = _instance_read(row)
@@ -95,7 +106,7 @@ def refresh_status(internal_id: str, db: DbSession, tenant_id: TenantId, user: C
     except ZapiError as exc:
         row.status = "error"
         db.commit()
-        raise HTTPException(status_code=502, detail=f"Falha ao consultar Z-API (HTTP {exc.status_code or 'rede'})") from exc
+        raise HTTPException(status_code=502, detail=f"Falha ao consultar a conexão (HTTP {exc.status_code or 'rede'})") from exc
     row.status = "connected" if response.get("connected") is True else "disconnected"
     db.commit()
     return {"id": row.id, "status": row.status, "agent_id":row.agent_id, "global_sending_enabled":settings.outbound_enabled, "sending_enabled":row.sending_enabled, "messages_per_minute":row.messages_per_minute, "connected": response.get("connected") is True, "smartphone_connected": response.get("smartphoneConnected") is True}
@@ -258,3 +269,121 @@ def configure_instance_webhooks(internal_id: str, db: DbSession, tenant_id: Tena
     row.webhook_configured = True
     db.commit()
     return {'configured': True}
+
+
+def _intervention_route_read(row):
+    profile = _connection_profile(row.provider)
+    return {'instance_id':row.id,'provider':row.provider,
+        'connection_label':profile['connection_label'],'can_create_group':profile['can_create_group'],
+        'group_id':row.intervention_group_id,
+        'staff_phones':row.intervention_staff_phones or [],
+        'webhook_configured':row.webhook_configured,
+        'validation_status':row.intervention_group_validation,
+        'test_sent_at':row.intervention_group_tested_at.isoformat() if row.intervention_group_tested_at else None,
+        'validated_at':row.intervention_group_validated_at.isoformat() if row.intervention_group_validated_at else None,
+        'ready':row.intervention_group_validation=='validated' and bool(row.intervention_group_id) and bool(row.intervention_staff_phones) and row.webhook_configured}
+
+
+@router.get('/zapi/instances/{internal_id}/intervention-routing')
+def get_intervention_routing(internal_id: str, db: DbSession, tenant_id: TenantId, user: CurrentUser):
+    _require_admin(user)
+    return _intervention_route_read(_get_instance(db,tenant_id,internal_id))
+
+
+@router.put('/zapi/instances/{internal_id}/intervention-routing')
+def update_intervention_routing(internal_id: str, payload: InterventionRoutingUpdate, db: DbSession, tenant_id: TenantId, user: CurrentUser):
+    from app.locks import tenant_guard
+    _require_admin(user)
+    with tenant_guard(tenant_id):
+        row=_get_instance(db,tenant_id,internal_id)
+        changed=(row.intervention_group_id!=payload.group_id.strip() or
+                 row.intervention_staff_phones!=payload.staff_phones)
+        row.intervention_group_id=payload.group_id.strip()
+        row.intervention_staff_phones=payload.staff_phones
+        if changed:
+            row.intervention_group_validation='pending'
+            row.intervention_group_tested_at=None
+            row.intervention_group_validated_at=None
+            db.query(InterventionRequest).filter(
+                InterventionRequest.instance_id==row.id,
+                InterventionRequest.status=='awaiting_claim').update(
+                    {'status':'setup_required','notification_status':'cancelled'},synchronize_session=False)
+        db.commit()
+        return _intervention_route_read(row)
+
+
+@router.post('/zapi/instances/{internal_id}/intervention-routing/create-group')
+def create_intervention_group(internal_id: str, payload: InterventionGroupCreate, db: DbSession, tenant_id: TenantId, user: CurrentUser):
+    from app.locks import tenant_guard
+    _require_admin(user)
+    if not payload.confirmed_not_connected_number:
+        raise HTTPException(422,detail='Confirme que a lista não inclui o número conectado a esta conexão')
+    with tenant_guard(tenant_id):
+        row=_get_instance(db,tenant_id,internal_id)
+        if not _connection_profile(row.provider)['can_create_group']:
+            raise HTTPException(409,detail='Esta conexão não oferece criação de grupo. Cadastre o identificador do grupo criado no WhatsApp.')
+        if not settings.outbound_enabled or not row.sending_enabled:
+            raise HTTPException(409,detail='O envio está pausado. Libere o envio global e desta conexão antes de criar o grupo.')
+        try:
+            result=_client(row).create_group(payload.group_name,payload.phones,auto_invite=payload.auto_invite)
+        except (ZapiError,ValueError) as exc:
+            raise HTTPException(502,detail='O provedor não confirmou a criação do grupo. Confira o WhatsApp antes de tentar novamente.') from exc
+        group_id=str(result.get('phone') or '').strip()
+        invitation_link=str(result.get('invitationLink') or '')
+        if not group_id or len(group_id)>240 or not all(ch.isalnum() or ch in '@._-' for ch in group_id):
+            raise HTTPException(502,detail='O provedor não retornou um identificador reconhecível. Confira se o grupo foi criado antes de repetir a ação.')
+        row.intervention_group_id=group_id
+        row.intervention_staff_phones=payload.phones
+        row.intervention_group_validation='pending'
+        row.intervention_group_tested_at=None
+        row.intervention_group_validated_at=None
+        db.query(InterventionRequest).filter(
+            InterventionRequest.instance_id==row.id,
+            InterventionRequest.status=='awaiting_claim').update(
+                {'status':'setup_required','notification_status':'cancelled'},synchronize_session=False)
+        db.commit()
+        # The invitation link is returned only to the initiating administrator; never persist or log it.
+        return {'group_id':group_id,'invitation_link':invitation_link or None,
+            'validation_status':'pending','staff_phones':row.intervention_staff_phones}
+
+
+@router.post('/zapi/instances/{internal_id}/intervention-routing/test')
+def test_intervention_group(internal_id: str, db: DbSession, tenant_id: TenantId, user: CurrentUser):
+    from app.locks import tenant_guard
+    _require_admin(user)
+    with tenant_guard(tenant_id):
+        row=_get_instance(db,tenant_id,internal_id)
+        if not row.intervention_group_id or not row.intervention_staff_phones:
+            raise HTTPException(409,detail='Cadastre o grupo e ao menos um atendente antes de enviar o teste')
+        if not row.webhook_configured:
+            raise HTTPException(409,detail='Configure e confirme o callback de mensagens recebidas antes do teste do grupo')
+        if not settings.outbound_enabled or not row.sending_enabled:
+            raise HTTPException(409,detail='O envio está pausado. Libere o envio global e desta conexão antes do teste explícito.')
+        try:
+            group_client(row).send_text(row.intervention_group_id,
+                'Teste de configuração do diBBerDesk. Se esta mensagem chegou ao grupo correto, volte à plataforma e confirme o recebimento.')
+        except (ZapiError,ValueError) as exc:
+            row.intervention_group_validation='pending'
+            db.commit()
+            raise HTTPException(502,detail='Não foi possível enviar o teste ao grupo. Confira o identificador e tente novamente.') from exc
+        row.intervention_group_validation='test_sent'
+        row.intervention_group_tested_at=datetime.now(timezone.utc)
+        row.intervention_group_validated_at=None
+        db.commit()
+        return _intervention_route_read(row)
+
+
+@router.post('/zapi/instances/{internal_id}/intervention-routing/confirm')
+def confirm_intervention_group(internal_id: str, payload: InterventionGroupConfirmation, db: DbSession, tenant_id: TenantId, user: CurrentUser):
+    from app.locks import tenant_guard
+    _require_admin(user)
+    if not payload.confirmed_received:
+        raise HTTPException(422,detail='Confirme que a mensagem de teste foi recebida no grupo correto')
+    with tenant_guard(tenant_id):
+        row=_get_instance(db,tenant_id,internal_id)
+        if row.intervention_group_validation!='test_sent' or not row.intervention_group_tested_at:
+            raise HTTPException(409,detail='Envie e confira a mensagem de teste antes de validar o grupo')
+        row.intervention_group_validation='validated'
+        row.intervention_group_validated_at=datetime.now(timezone.utc)
+        db.commit()
+        return _intervention_route_read(row)

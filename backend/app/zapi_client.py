@@ -56,6 +56,21 @@ class ZapiClient:
             raise ValueError("Informe telefone apenas com dígitos, ou o identificador de grupo permitido pela Z-API")
         return self._request("POST", "send-text", json={"phone": normalized, "message": message})
 
+    def create_group(self, group_name: str, phones: list[str], *, auto_invite: bool = False) -> dict:
+        if not group_name.strip() or not phones:
+            raise ValueError("Informe o nome do grupo e pelo menos um participante")
+        normalized=[]
+        for phone in phones:
+            digits=''.join(ch for ch in str(phone) if ch.isdigit())
+            if not 10 <= len(digits) <= 15:
+                raise ValueError("Telefone de participante inválido")
+            if digits not in normalized:
+                normalized.append(digits)
+        return self._request("POST", "create-group", json={
+            "groupName": group_name.strip(), "phones": normalized,
+            "autoInvite": bool(auto_invite),
+        })
+
     def status(self) -> dict:
         return self._request("GET", "status")
 

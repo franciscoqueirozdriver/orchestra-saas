@@ -58,11 +58,17 @@ class ZapiInstance(Base):
     __tablename__ = "zapi_instances"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(40), nullable=False, default='zapi', server_default='zapi')
     label: Mapped[str] = mapped_column(String(120), nullable=False)
     instance_id: Mapped[str] = mapped_column(String(160), nullable=False, unique=True, index=True)
     agent_id: Mapped[str | None] = mapped_column(ForeignKey("agents.id", ondelete="SET NULL"), index=True)
     sending_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     messages_per_minute: Mapped[int] = mapped_column(Integer, nullable=False, default=10, server_default="10")
+    intervention_group_id: Mapped[str | None] = mapped_column(String(240))
+    intervention_staff_phones: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
+    intervention_group_validation: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", server_default="pending")
+    intervention_group_tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    intervention_group_validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     token_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
     client_token_encrypted: Mapped[str | None] = mapped_column(Text)
     callback_token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -301,6 +307,30 @@ class ConversationAction(Base):
     action: Mapped[str] = mapped_column(String(40),nullable=False)
     revision: Mapped[int] = mapped_column(Integer,nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),server_default=func.now())
+
+
+class InterventionRequest(Base):
+    __tablename__ = 'intervention_requests'
+    __table_args__ = (
+        ForeignKeyConstraint(['conversation_id','tenant_id'],['conversations.id','conversations.tenant_id'],ondelete='CASCADE'),
+        Index('ix_intervention_tenant_status_created','tenant_id','status','created_at'),
+        Index('uq_intervention_instance_code_open','instance_id','code',unique=True,
+              postgresql_where=text("status IN ('awaiting_claim','claimed','setup_required')"),
+              sqlite_where=text("status IN ('awaiting_claim','claimed','setup_required')")),
+    )
+    id: Mapped[str] = mapped_column(String(36),primary_key=True,default=new_id)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey('tenants.id',ondelete='CASCADE'),nullable=False,index=True)
+    instance_id: Mapped[str] = mapped_column(ForeignKey('zapi_instances.id',ondelete='CASCADE'),nullable=False,index=True)
+    conversation_id: Mapped[str] = mapped_column(String(36),nullable=False,index=True)
+    code: Mapped[str] = mapped_column(String(8),nullable=False)
+    reason: Mapped[str] = mapped_column(String(80),nullable=False)
+    status: Mapped[str] = mapped_column(String(24),nullable=False,default='awaiting_claim',server_default='awaiting_claim')
+    notification_status: Mapped[str] = mapped_column(String(24),nullable=False,default='pending',server_default='pending')
+    claimed_by_phone: Mapped[str | None] = mapped_column(String(24))
+    context_delivery_status: Mapped[str] = mapped_column(String(24),nullable=False,default='pending',server_default='pending')
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),nullable=False,server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),nullable=False)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class OutboxPart(Base):
