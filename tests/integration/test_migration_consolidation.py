@@ -76,7 +76,9 @@ def test_frozen_initial_and_legacy_upgrade_preserve_schema_and_synthetic_data():
         alembic(ROOT, 'upgrade', 'head')
         upgraded = shape(engine)
         with engine.connect() as c:
-            assert c.scalar(text('SELECT version_num FROM alembic_version')) == '0008_historical_conversations'
+            assert c.scalar(text('SELECT version_num FROM alembic_version')) == '0009_human_interventions'
+            assert c.scalar(text("SELECT provider FROM zapi_instances WHERE id='instance-a'")) == 'zapi'
+            assert c.scalar(text('SELECT count(*) FROM intervention_requests')) == 0
             assert c.scalar(text("SELECT history_only FROM conversations WHERE id='conversation-a'")) is False
             assert c.scalar(text("SELECT count(*) FROM historical_import_batches")) == 0
             assert c.scalar(text("SELECT count(*) FROM messages WHERE content='synthetic only'")) == 1

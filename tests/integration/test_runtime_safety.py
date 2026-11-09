@@ -472,7 +472,7 @@ def test_core_cancel_and_human_commands_preempt_generation(runtime,monkeypatch):
         assert db.get(Conversation,'conversation-a').status=='human'
         assert db.query(ConversationAction).count()==2
         acknowledgment=db.query(OutboxMessage).filter_by(author_kind='system').one()
-        assert 'Não tenho confirmação' in acknowledgment.content
+        assert 'O grupo de atendimento humano não está configurado ou o alerta ainda não foi confirmado.' in acknowledgment.content
     assert runtime.tasks.process_webhook_event.run(event(runtime,'follow-human',payload={'phone':'synthetic-contact','normalizedKind':'text','normalizedText':'Outra dúvida'}))=='stored_no_auto_reply'
 
 
