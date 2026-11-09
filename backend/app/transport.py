@@ -52,13 +52,17 @@ def _receipt_id(identifier):
     return identifier if valid else None
 
 
+def is_wame_provider(provider) -> bool:
+    return isinstance(provider, str) and (provider == 'wame' or provider.startswith('wame_'))
+
+
 def client_for(instance):
-    if getattr(instance, 'provider', 'zapi') == 'wame':
+    if is_wame_provider(getattr(instance, 'provider', 'zapi')):
         return WameClient(decrypt_secret(instance.token_encrypted) or '')
     return ZapiClient(instance.instance_id, decrypt_secret(instance.token_encrypted) or '', decrypt_secret(instance.client_token_encrypted))
 
 
 def for_instance(instance):
-    if getattr(instance, 'provider', 'zapi') == 'wame':
+    if is_wame_provider(getattr(instance, 'provider', 'zapi')):
         return WameTransport(instance)
     return ZapiTransport(instance)

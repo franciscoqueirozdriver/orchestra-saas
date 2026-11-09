@@ -11,7 +11,7 @@ from app.dependencies import CurrentUser, DbSession, TenantId
 from app.models import Agent, Conversation, Message, OutboxMessage, User, ZapiInstance, InterventionRequest
 from app.schemas import SendTextRequest, ZapiInstanceCreate, InstancePolicyUpdate, InterventionRoutingUpdate, InterventionGroupCreate, InterventionGroupConfirmation
 from app.security import callback_secret_matches, decrypt_secret, encrypt_secret, hash_callback_secret
-from app.transport import client_for
+from app.transport import client_for, is_wame_provider
 from app.wame_payload import is_wame_envelope, normalize_wame_events
 from app.zapi_client import ZapiError
 from app.zapi_payload import classify, contact_key, contact_name, event_key
@@ -38,10 +38,11 @@ def _client(row: ZapiInstance):
 
 
 def _connection_profile(provider: str) -> dict:
-    # Rótulos de tela não usam nome de fornecedor. O identificador interno escolhe o contrato.
     profiles = {
-        "zapi": {"connection_label": "Z-API", "can_create_group": True},
+        "zapi": {"connection_label": "Z-API · API não oficial (QR Code)", "can_create_group": True},
         "wame": {"connection_label": "WAME", "can_create_group": True},
+        "wame_qr": {"connection_label": "WAME · API não oficial (QR Code)", "can_create_group": True},
+        "wame_official": {"connection_label": "WAME · API oficial", "can_create_group": True},
     }
     return profiles.get(provider, {"connection_label": "Conexão WhatsApp", "can_create_group": False})
 
@@ -194,14 +195,14 @@ async def receive_zapi_webhook(instance_id: str, callback_token: str, request: R
     if not accepted:
         raise HTTPException(status_code=404, detail="Webhook não encontrado")
     if is_wame_envelope(payload):
-        if row.provider != "wame":
+        if not is_wame_provider(row.provider):
             raise HTTPException(status_code=400, detail="Identificador de instância não confere")
         events = normalize_wame_events(payload)
         if not events:
             return {"accepted": True, "duplicate": False}
         stored = [_accept_event(db, row, item) for item in events]
         return {"accepted": True, "duplicate": all(item["duplicate"] for item in stored)}
-    if row.provider == "wame":
+    if is_wame_provider(row.provider):
         raise HTTPException(status_code=422, detail="Evento não reconhecido para esta conexão")
     payload_instance = payload.get("instanceId")
     if payload_instance and str(payload_instance) != row.instance_id:

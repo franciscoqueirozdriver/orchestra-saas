@@ -58,8 +58,21 @@ def test_alternative_provider_is_accepted_and_unknown_is_not():
     created = ZapiInstanceCreate(provider="wame", label="Loja", instance_id="loja-01", token="chave-da-instancia")
     assert created.provider == "wame"
     assert created.client_token is None
+    qr = ZapiInstanceCreate(provider="wame_qr", label="Loja", instance_id="loja-01", token="chave-da-instancia", client_token="nao-usar")
+    official = ZapiInstanceCreate(provider="wame_official", label="Loja", instance_id="loja-01", token="chave-da-instancia")
+    assert qr.provider == "wame_qr" and qr.client_token is None
+    assert official.provider == "wame_official"
     with pytest.raises(ValidationError):
         ZapiInstanceCreate(provider="outro", label="Loja", instance_id="loja-01", token="chave-da-instancia")
+    with pytest.raises(ValidationError):
+        ZapiInstanceCreate(provider="zapi_official", label="Loja", instance_id="loja-01", token="chave-da-instancia")
+
+
+def test_both_wame_models_use_the_wame_connector():
+    from app.transport import is_wame_provider
+
+    assert is_wame_provider("wame") and is_wame_provider("wame_qr") and is_wame_provider("wame_official")
+    assert is_wame_provider("zapi") is False
 
 
 def test_official_and_qr_text_become_the_same_internal_event():

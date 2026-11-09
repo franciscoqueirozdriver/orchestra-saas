@@ -58,11 +58,17 @@ class AgentUpdate(BaseModel):
 
 
 class ZapiInstanceCreate(BaseModel):
-    provider: str = Field(default='zapi', pattern=r'^(zapi|wame)$')
+    provider: str = Field(default='zapi', pattern=r'^(zapi|wame|wame_qr|wame_official)$')
     label: str = Field(min_length=2, max_length=120)
     instance_id: str = Field(min_length=3, max_length=160, pattern=r"^[A-Za-z0-9_-]+$")
     token: str = Field(min_length=4, max_length=512)
     client_token: str | None = Field(default=None, max_length=512)
+
+    @model_validator(mode='after')
+    def wame_uses_only_the_instance_key(self):
+        if self.provider == 'wame' or self.provider.startswith('wame_'):
+            self.client_token = None
+        return self
 
 
 class LLMConfigUpsert(BaseModel):
