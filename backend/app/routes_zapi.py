@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
 from app.dependencies import CurrentUser, DbSession, TenantId
+from app.outbound_control import outbound_is_enabled
 from app.models import Agent, Conversation, Message, OutboxMessage, User, ZapiInstance, InterventionRequest
 from app.schemas import SendTextRequest, ZapiInstanceCreate, InstancePolicyUpdate, InterventionRoutingUpdate, InterventionGroupCreate, InterventionGroupConfirmation
 from app.security import callback_secret_matches, decrypt_secret, encrypt_secret, hash_callback_secret
@@ -49,7 +50,7 @@ def _connection_profile(provider: str) -> dict:
 
 def _instance_read(row: ZapiInstance) -> dict:
     profile = _connection_profile(row.provider)
-    return {"id": row.id, "provider": row.provider, "connection_label": profile["connection_label"], "can_create_group": profile["can_create_group"], "label": row.label, "instance_id": row.instance_id, "api_base_url": row.api_base_url, "status": row.status, "agent_id":row.agent_id, "global_sending_enabled":settings.outbound_enabled, "sending_enabled":row.sending_enabled, "messages_per_minute":row.messages_per_minute, "webhook_configured": row.webhook_configured, "credentials_configured": True, "created_at": row.created_at.isoformat()}
+    return {"id": row.id, "provider": row.provider, "connection_label": profile["connection_label"], "can_create_group": profile["can_create_group"], "label": row.label, "instance_id": row.instance_id, "api_base_url": row.api_base_url, "status": row.status, "agent_id":row.agent_id, "global_sending_enabled":outbound_is_enabled(), "sending_enabled":row.sending_enabled, "messages_per_minute":row.messages_per_minute, "webhook_configured": row.webhook_configured, "credentials_configured": True, "created_at": row.created_at.isoformat()}
 
 
 @router.get("/zapi/instances")
@@ -114,7 +115,7 @@ def refresh_status(internal_id: str, db: DbSession, tenant_id: TenantId, user: C
         raise HTTPException(status_code=502, detail=f"Falha ao consultar a conexão (HTTP {exc.status_code or 'rede'})") from exc
     row.status = "connected" if response.get("connected") is True else "disconnected"
     db.commit()
-    return {"id": row.id, "status": row.status, "agent_id":row.agent_id, "global_sending_enabled":settings.outbound_enabled, "sending_enabled":row.sending_enabled, "messages_per_minute":row.messages_per_minute, "connected": response.get("connected") is True, "smartphone_connected": response.get("smartphoneConnected") is True}
+    return {"id": row.id, "status": row.status, "agent_id":row.agent_id, "global_sending_enabled":outbound_is_enabled(), "sending_enabled":row.sending_enabled, "messages_per_minute":row.messages_per_minute, "connected": response.get("connected") is True, "smartphone_connected": response.get("smartphoneConnected") is True}
 
 
 @router.post("/zapi/instances/{internal_id}/send-text", status_code=202)
@@ -340,8 +341,8 @@ def create_intervention_group(internal_id: str, payload: InterventionGroupCreate
         row=_get_instance(db,tenant_id,internal_id)
         if not _connection_profile(row.provider)['can_create_group']:
             raise HTTPException(409,detail='Esta conexão não oferece criação de grupo. Cadastre o identificador do grupo criado no WhatsApp.')
-        if not settings.outbound_enabled or not row.sending_enabled:
-            raise HTTPException(409,detail='O envio está pausado. Libere o envio global e desta conexão antes de criar o grupo.')
+        if not outbound_is_enabled() or not row.sending_enabled:
+            raise HTTPException(409,detail='O envio está pausado. Em Configurações libere o envio global; em Agente e envio libere esta conexão. Depois tente criar o grupo.')
         try:
             result=_client(row).create_group(payload.group_name,payload.phones,auto_invite=payload.auto_invite)
         except (ZapiError,ValueError) as exc:
@@ -375,8 +376,8 @@ def test_intervention_group(internal_id: str, db: DbSession, tenant_id: TenantId
             raise HTTPException(409,detail='Cadastre o grupo e ao menos um atendente antes de enviar o teste')
         if not row.webhook_configured:
             raise HTTPException(409,detail='Configure e confirme o callback de mensagens recebidas antes do teste do grupo')
-        if not settings.outbound_enabled or not row.sending_enabled:
-            raise HTTPException(409,detail='O envio está pausado. Libere o envio global e desta conexão antes do teste explícito.')
+        if not outbound_is_enabled() or not row.sending_enabled:
+            raise HTTPException(409,detail='O envio está pausado. Em Configurações libere o envio global; em Agente e envio libere esta conexão. Depois tente o teste.')
         try:
             group_client(row).send_text(row.intervention_group_id,
                 'Teste de configuração do diBBerDesk. Se esta mensagem chegou ao grupo correto, volte à plataforma e confirme o recebimento.')

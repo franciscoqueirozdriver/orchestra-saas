@@ -8,6 +8,7 @@ from app.config import settings
 from app.database import SessionLocal
 from app.locks import tenant_guard
 from app.models import Agent, Conversation, Message, OutboxMessage, OutboxPart, ZapiInstance
+from app.outbound_control import outbound_is_enabled
 from app.policy import sending_denial, advance_status, STATUS_RANK
 from app.transport import for_instance, TransportError
 
@@ -53,7 +54,7 @@ def enqueue(db, instance, conversation, content, *, revision=None, idempotency_k
 
 
 def dispatch(outbox_id):
-    if not settings.outbound_enabled:
+    if not outbound_is_enabled():
         return 'outbound_disabled'
     db = SessionLocal()
     try:

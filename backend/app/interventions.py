@@ -6,6 +6,7 @@ import secrets
 from app.models import InterventionRequest, Message, Conversation
 from app.zapi_client import ZapiError
 from app.config import settings
+from app.outbound_control import outbound_is_enabled
 from app.transport import client_for
 
 CLAIM_COMMAND = re.compile(r'^\s*ASSUMINDO\s+(\d{6})\s*$', re.IGNORECASE)
@@ -73,7 +74,7 @@ def send_group_alert(db, instance, ticket):
         return False
     if not instance.intervention_group_id or not instance.intervention_staff_phones:
         ticket.status='setup_required';ticket.notification_status='not_configured';db.commit();return False
-    if not settings.outbound_enabled or not instance.sending_enabled:
+    if not outbound_is_enabled() or not instance.sending_enabled:
         ticket.notification_status='blocked';db.commit();return False
     ticket.notification_status='dispatching'
     db.commit()
@@ -104,7 +105,7 @@ def private_claim(db, instance, payload):
     code=match.group(1)
     if not phone or phone not in {normalize_phone(x) for x in (instance.intervention_staff_phones or [])}:
         return {'status':'unauthorized','phone':phone}
-    if not settings.outbound_enabled or not instance.sending_enabled:
+    if not outbound_is_enabled() or not instance.sending_enabled:
         return {'status':'blocked','phone':phone}
     now=datetime.now(timezone.utc)
     row=db.query(InterventionRequest).filter_by(instance_id=instance.id,code=code).first()

@@ -16,6 +16,7 @@ from app.embedding_config import knowledge_embedding_config
 from app.llm_client import LLMError
 from app.locks import tenant_guard, advisory_guard
 from app.model_router import generate_with_fallback, candidate_configs
+from app.outbound_control import outbound_is_enabled
 from app.policy import is_opt_out, sending_denial, advance_status
 from app.models import Agent, Conversation, ConversationContactAlias, KnowledgeChunk, KnowledgeDocument, LLMConfig, MemoryItem, Message, OutboxMessage, WebhookEvent, ZapiInstance
 from app.security import decrypt_secret
@@ -292,7 +293,7 @@ def _escalate_after_automation_failure(db,tenant_id,conversation_id,revision,rea
 
 @celery_app.task(name='app.tasks.respond_to_conversation')
 def respond_to_conversation(tenant_id, conversation_id, expected_revision):
-    if not settings.outbound_enabled:
+    if not outbound_is_enabled():
         return 'outbound_disabled'
     # A duplicate job cannot generate twice for the same conversation, even across workers.
     with advisory_guard('orchestra:generation:' + tenant_id + ':' + conversation_id, blocking=False) as acquired:
@@ -447,7 +448,7 @@ def recover_pending_work():
             for event in events:
                 process_webhook_event.delay(event.id)
             pending = []
-            if settings.outbound_enabled:
+            if outbound_is_enabled():
                 pending = db.query(OutboxMessage).filter(OutboxMessage.status.in_(['pending', 'retry_wait']),
                     (OutboxMessage.next_attempt_at.is_(None)) | (OutboxMessage.next_attempt_at <= now)).order_by(OutboxMessage.created_at).limit(100).all()
                 for item in pending:

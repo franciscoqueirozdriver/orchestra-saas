@@ -13,6 +13,7 @@ from app.routes_llm import router as llm_router
 from app.routes_tenants import router as tenants_router
 from app.routes_zapi import router as zapi_router
 from app.routes_users import router as users_router
+from app.routes_settings import router as settings_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 settings.ensure_runtime_secrets()
@@ -41,5 +42,5 @@ def api_health() -> JSONResponse:
     return JSONResponse({"ok": True, "service": "orquestra-api"})
 
 
-for router in (auth_router, tenants_router, agents_router, zapi_router, conversations_router, llm_router, knowledge_router, users_router):
+for router in (auth_router, tenants_router, agents_router, zapi_router, conversations_router, llm_router, knowledge_router, users_router, settings_router):
     app.include_router(router)
