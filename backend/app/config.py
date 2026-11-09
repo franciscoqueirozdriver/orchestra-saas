@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     credentials_encryption_key: str = ""
     public_base_url: str = ""
     zapi_api_base_url: str = "https://api.z-api.io"
+    wame_api_base_url: str = "https://server.wame.api.br"
     media_dir: str = "./data/media"
     upload_max_mb: int = Field(default=20, ge=1, le=50)
     embedding_dimensions: int = Field(default=1536)
@@ -47,6 +48,15 @@ class Settings(BaseSettings):
             raise ValueError("A URL base da Z-API precisa usar HTTPS")
         return value
 
+    @field_validator("wame_api_base_url")
+    @classmethod
+    def validate_wame_base_url(cls, value: str) -> str:
+        value = value.strip().rstrip("/")
+        parsed = urlparse(value)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError("A URL base da conexão alternativa precisa ser uma origem HTTPS")
+        return value
+
     @field_validator("embedding_dimensions")
     @classmethod
     def validate_embedding_dimensions(cls, value: int) -> int:
@@ -62,7 +72,7 @@ class Settings(BaseSettings):
         except (ValueError, UnicodeEncodeError) as exc:
             raise RuntimeError("CREDENTIALS_ENCRYPTION_KEY inválida; gere uma chave Fernet Base64") from exc
         if self.environment.lower() == "production" and not self.public_base_url:
-            raise RuntimeError("PUBLIC_BASE_URL HTTPS é obrigatório em produção para webhooks Z-API")
+            raise RuntimeError("PUBLIC_BASE_URL HTTPS é obrigatório em produção para webhooks das conexões")
         Path(self.media_dir).mkdir(parents=True, exist_ok=True)
 
 

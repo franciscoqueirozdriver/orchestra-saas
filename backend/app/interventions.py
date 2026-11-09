@@ -4,9 +4,9 @@ import re
 import secrets
 
 from app.models import InterventionRequest, Message, Conversation
-from app.zapi_client import ZapiClient, ZapiError
-from app.security import decrypt_secret
+from app.zapi_client import ZapiError
 from app.config import settings
+from app.transport import client_for
 
 CLAIM_COMMAND = re.compile(r'^\s*ASSUMINDO\s+(\d{6})\s*$', re.IGNORECASE)
 TICKET_TTL_MINUTES = 60
@@ -18,8 +18,7 @@ def normalize_phone(value):
 
 
 def group_client(instance):
-    return ZapiClient(instance.instance_id, decrypt_secret(instance.token_encrypted) or '',
-                      decrypt_secret(instance.client_token_encrypted))
+    return client_for(instance)
 
 
 def context_for(db, conversation, reason):

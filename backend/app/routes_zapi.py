@@ -11,7 +11,9 @@ from app.dependencies import CurrentUser, DbSession, TenantId
 from app.models import Agent, Conversation, Message, OutboxMessage, User, ZapiInstance, InterventionRequest
 from app.schemas import SendTextRequest, ZapiInstanceCreate, InstancePolicyUpdate, InterventionRoutingUpdate, InterventionGroupCreate, InterventionGroupConfirmation
 from app.security import callback_secret_matches, decrypt_secret, encrypt_secret, hash_callback_secret
-from app.zapi_client import ZapiClient, ZapiError
+from app.transport import client_for
+from app.wame_payload import is_wame_envelope, normalize_wame_events
+from app.zapi_client import ZapiError
 from app.zapi_payload import classify, contact_key, contact_name, event_key
 from app.interventions import group_client
 
@@ -31,14 +33,15 @@ def _get_instance(db, tenant_id: str, internal_id: str) -> ZapiInstance:
     return row
 
 
-def _client(row: ZapiInstance) -> ZapiClient:
-    return ZapiClient(row.instance_id, decrypt_secret(row.token_encrypted) or "", decrypt_secret(row.client_token_encrypted))
+def _client(row: ZapiInstance):
+    return client_for(row)
 
 
 def _connection_profile(provider: str) -> dict:
-    # Rótulos de tela não usam nome de fornecedor. Novos conectores entram aqui.
+    # Rótulos de tela não usam nome de fornecedor. O identificador interno escolhe o contrato.
     profiles = {
         "zapi": {"connection_label": "WhatsApp via API", "can_create_group": True},
+        "wame": {"connection_label": "WhatsApp via API alternativa", "can_create_group": True},
     }
     return profiles.get(provider, {"connection_label": "WhatsApp via API", "can_create_group": False})
 
@@ -190,9 +193,23 @@ async def receive_zapi_webhook(instance_id: str, callback_token: str, request: R
         accepted = row.callback_previous_until > datetime.now(timezone.utc) and callback_secret_matches(row.callback_previous_hash, callback_token)
     if not accepted:
         raise HTTPException(status_code=404, detail="Webhook não encontrado")
+    if is_wame_envelope(payload):
+        if row.provider != "wame":
+            raise HTTPException(status_code=400, detail="Identificador de instância não confere")
+        events = normalize_wame_events(payload)
+        if not events:
+            return {"accepted": True, "duplicate": False}
+        stored = [_accept_event(db, row, item) for item in events]
+        return {"accepted": True, "duplicate": all(item["duplicate"] for item in stored)}
+    if row.provider == "wame":
+        raise HTTPException(status_code=422, detail="Evento não reconhecido para esta conexão")
     payload_instance = payload.get("instanceId")
     if payload_instance and str(payload_instance) != row.instance_id:
         raise HTTPException(status_code=400, detail="Identificador de instância não confere")
+    return _accept_event(db, row, payload)
+
+
+def _accept_event(db, row: ZapiInstance, payload: dict) -> dict:
     if payload.get('type') == 'MessageStatusCallback':
         if not isinstance(payload.get('ids'), list) or not payload['ids'] or len(payload['ids']) > 1000 or any(not isinstance(i, (str, int)) or isinstance(i, bool) or len(str(i)) > 180 for i in payload['ids']):
             raise HTTPException(422, detail='Callback de status requer ids válidos')
@@ -208,7 +225,7 @@ async def receive_zapi_webhook(instance_id: str, callback_token: str, request: R
                 from app.tasks import process_webhook_event
                 process_webhook_event.delay(existing.id)
             except Exception:
-                logger.warning("Evento Z-API %s ainda não processado; reenvio para worker falhou", existing.id)
+                logger.warning("Evento de conexão %s ainda não processado; reenvio para worker falhou", existing.id)
         return {"accepted": True, "duplicate": True}
     event = WebhookEvent(tenant_id=row.tenant_id, instance_id=row.id, event_key=key, event_type=event_type, payload=_minimize_payload(payload))
     db.add(event)
@@ -222,8 +239,7 @@ async def receive_zapi_webhook(instance_id: str, callback_token: str, request: R
         from app.tasks import process_webhook_event
         process_webhook_event.delay(event.id)
     except Exception:
-        # O evento continua persistido no banco; o retorno não revela o payload nem segredos.
-        logger.warning("Evento Z-API %s persistido, mas não despachado; verificar worker/broker", event.id)
+        logger.warning("Evento de conexão %s persistido, mas não despachado; verificar worker/broker", event.id)
     return {"accepted": True, "duplicate": False}
 
 

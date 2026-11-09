@@ -58,7 +58,7 @@ class AgentUpdate(BaseModel):
 
 
 class ZapiInstanceCreate(BaseModel):
-    provider: str = Field(default='zapi',pattern=r'^zapi$')
+    provider: str = Field(default='zapi', pattern=r'^(zapi|wame)$')
     label: str = Field(min_length=2, max_length=120)
     instance_id: str = Field(min_length=3, max_length=160, pattern=r"^[A-Za-z0-9_-]+$")
     token: str = Field(min_length=4, max_length=512)
