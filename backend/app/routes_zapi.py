@@ -40,10 +40,10 @@ def _client(row: ZapiInstance):
 def _connection_profile(provider: str) -> dict:
     # Rótulos de tela não usam nome de fornecedor. O identificador interno escolhe o contrato.
     profiles = {
-        "zapi": {"connection_label": "WhatsApp via API", "can_create_group": True},
-        "wame": {"connection_label": "WhatsApp via API alternativa", "can_create_group": True},
+        "zapi": {"connection_label": "Z-API", "can_create_group": True},
+        "wame": {"connection_label": "WAME", "can_create_group": True},
     }
-    return profiles.get(provider, {"connection_label": "WhatsApp via API", "can_create_group": False})
+    return profiles.get(provider, {"connection_label": "Conexão WhatsApp", "can_create_group": False})
 
 
 def _instance_read(row: ZapiInstance) -> dict:

@@ -1,10 +1,10 @@
 # Conexões WhatsApp
 
-A tela **Conexões WhatsApp** é o lugar em que a empresa escolhe o fornecedor e cola as credenciais. Depois de salva, a conexão usa o mesmo atendimento, o mesmo envio, o mesmo webhook e a mesma criação manual de grupo. O rótulo do botão continua **Criar grupo via API**.
+A tela **Conexões WhatsApp** escolhe o fornecedor pelo nome. **Z-API** é a conexão com ID e token. **WAME** é a conexão com a chave da instância, no canal oficial ou por QR. Depois de salva, as duas usam o mesmo atendimento, o mesmo envio, o mesmo webhook e a mesma criação manual de grupo. O botão continua **Criar grupo via API**.
 
 Não há migration nova para a segunda conexão. O tipo fica na coluna `provider`, já existente: `zapi` ou `wame`. A chave é criptografada e a API não a devolve.
 
-## WhatsApp via API
+## Z-API
 
 Crie a instância do número no painel desse fornecedor.
 
@@ -16,7 +16,7 @@ Crie a instância do número no painel desse fornecedor.
 
 Não cole o token no campo de ID. Depois de salvar, use **Callbacks**. Se a plataforma não confirmar o registro, cadastre a URL mostrada nos callbacks de mensagens recebidas do fornecedor. A URL contém o segredo de callback e não deve ir para o Git nem para um ticket.
 
-## WhatsApp via API alternativa
+## WAME
 
 Ative a instância no painel desse fornecedor. A mesma chave vale para o canal oficial e para a conexão por QR.
 
