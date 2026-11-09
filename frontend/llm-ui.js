@@ -2,7 +2,7 @@
 (() => {
   'use strict';
   window.OrchestraLlmUI = {create};
-  function create({request,esc,pageHead,loading,errorBox,table,openModal,closeModal,formSubmit,toast,getRoute}) {
+  function create({request,esc,pageHead,loading,errorBox,table,openModal,closeModal,formSubmit,toast,askConfirm,getRoute}) {
     const $=(selector,root=document)=>root.querySelector(selector);
     const $$=(selector,root=document)=>[...root.querySelectorAll(selector)];
     let cache=null;
@@ -23,7 +23,7 @@
         $$('[data-llm-edit]',root).forEach(b=>b.onclick=()=>connectionForm(data.find(c=>c.id===b.dataset.llmEdit),providers,()=>render(root)));
         $$('[data-llm-default]',root).forEach(b=>b.onclick=()=>mutate(b,`/llm/connections/${encodeURIComponent(b.dataset.llmDefault)}/default`,'POST',root));
         $$('[data-llm-resume]',root).forEach(b=>b.onclick=()=>mutate(b,`/llm/connections/${encodeURIComponent(b.dataset.llmResume)}/resume`,'POST',root));
-        $$('[data-llm-delete]',root).forEach(b=>b.onclick=()=>{if(confirm('Excluir esta conexão? Conexões padrão ou usadas por agentes não podem ser excluídas.'))mutate(b,`/llm/connections/${encodeURIComponent(b.dataset.llmDelete)}`,'DELETE',root);});
+        $$('[data-llm-delete]',root).forEach(b=>b.onclick=async()=>{if(await askConfirm('Excluir esta conexão? Conexões padrão ou usadas por agentes não podem ser excluídas.',{title:'Excluir conexão',confirmLabel:'Excluir',danger:true}))mutate(b,`/llm/connections/${encodeURIComponent(b.dataset.llmDelete)}`,'DELETE',root);});
       }catch(e){if(getRoute()==='model')root.innerHTML=pageHead('Modelos IA','Conexões da empresa')+errorBox(e);}
     }
     async function mutate(button,path,method,root){button.disabled=true;try{await request(path,{method});await render(root);}catch(e){toast(e.message,'error');button.disabled=false;}}
