@@ -24,14 +24,21 @@ class WameClient:
     never placed in the public webhook URL.
     """
 
-    def __init__(self, key: str) -> None:
+    def __init__(self, key: str, base_url: str | None = None) -> None:
         self.key = key.strip()
         if not self.key or any(ch in self.key for ch in "/?# \t\r\n"):
             raise ValueError("A chave da instância é inválida")
+        origin = (base_url or settings.wame_api_base_url).strip().rstrip("/")
+        parsed = urlparse(origin)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ("", "/"):
+            raise ValueError("A URL Server da WAME é inválida")
+        if parsed.port not in (None, 443):
+            raise ValueError("A URL Server da WAME é inválida")
+        self.base_url = origin
         self.timeout = httpx.Timeout(25.0, connect=8.0)
 
     def _url(self, suffix: str) -> str:
-        return f"{settings.wame_api_base_url}/{quote(self.key, safe='')}/{suffix.lstrip('/')}"
+        return f"{self.base_url}/{quote(self.key, safe='')}/{suffix.lstrip('/')}"
 
     def _request(self, method: str, suffix: str, *, json: dict | None = None) -> dict:
         try:

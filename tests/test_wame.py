@@ -55,17 +55,21 @@ QR_TEXT = {
 
 
 def test_alternative_provider_is_accepted_and_unknown_is_not():
-    created = ZapiInstanceCreate(provider="wame", label="Loja", instance_id="loja-01", token="chave-da-instancia")
+    created = ZapiInstanceCreate(provider="wame", label="Loja", instance_id="loja-01", token="chave-da-instancia", api_base_url="https://us.api-wa.me")
     assert created.provider == "wame"
     assert created.client_token is None
-    qr = ZapiInstanceCreate(provider="wame_qr", label="Loja", instance_id="loja-01", token="chave-da-instancia", client_token="nao-usar")
-    official = ZapiInstanceCreate(provider="wame_official", label="Loja", instance_id="loja-01", token="chave-da-instancia")
-    assert qr.provider == "wame_qr" and qr.client_token is None
+    assert created.api_base_url == "https://us.api-wa.me"
+    qr = ZapiInstanceCreate(provider="wame_qr", label="Loja", instance_id="loja-01", token="chave-da-instancia", client_token="nao-usar", api_base_url="https://us.api-wa.me/")
+    official = ZapiInstanceCreate(provider="wame_official", label="Loja", instance_id="loja-01", token="chave-da-instancia", api_base_url="https://us.api-wa.me")
+    assert qr.provider == "wame_qr" and qr.client_token is None and qr.api_base_url == "https://us.api-wa.me"
     assert official.provider == "wame_official"
     with pytest.raises(ValidationError):
-        ZapiInstanceCreate(provider="outro", label="Loja", instance_id="loja-01", token="chave-da-instancia")
+        ZapiInstanceCreate(provider="wame", label="Loja", instance_id="loja-01", token="chave-da-instancia")
+    with pytest.raises(ValidationError):
+        ZapiInstanceCreate(provider="outro", label="Loja", instance_id="loja-01", token="chave-da-instancia", api_base_url="https://us.api-wa.me")
     with pytest.raises(ValidationError):
         ZapiInstanceCreate(provider="zapi_official", label="Loja", instance_id="loja-01", token="chave-da-instancia")
+
 
 
 def test_both_wame_models_use_the_wame_connector():

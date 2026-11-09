@@ -69,6 +69,7 @@ class ZapiInstance(Base):
     intervention_group_validation: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", server_default="pending")
     intervention_group_tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     intervention_group_validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    api_base_url: Mapped[str | None] = mapped_column(String(500))
     token_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
     client_token_encrypted: Mapped[str | None] = mapped_column(Text)
     callback_token_hash: Mapped[str] = mapped_column(String(64), nullable=False)

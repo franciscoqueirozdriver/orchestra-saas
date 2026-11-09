@@ -34,7 +34,7 @@ class ZapiTransport:
 
 class WameTransport:
     def __init__(self, instance):
-        self.client = WameClient(decrypt_secret(instance.token_encrypted) or '')
+        self.client = WameClient(decrypt_secret(instance.token_encrypted) or '', getattr(instance, 'api_base_url', None))
 
     def send_text(self, destination, content):
         try:
@@ -58,7 +58,7 @@ def is_wame_provider(provider) -> bool:
 
 def client_for(instance):
     if is_wame_provider(getattr(instance, 'provider', 'zapi')):
-        return WameClient(decrypt_secret(instance.token_encrypted) or '')
+        return WameClient(decrypt_secret(instance.token_encrypted) or '', getattr(instance, 'api_base_url', None))
     return ZapiClient(instance.instance_id, decrypt_secret(instance.token_encrypted) or '', decrypt_secret(instance.client_token_encrypted))
 
 

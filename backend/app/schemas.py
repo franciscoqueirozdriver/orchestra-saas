@@ -57,17 +57,33 @@ class AgentUpdate(BaseModel):
     fallback_config_ids: list[str] | None = Field(default=None, max_length=8)
 
 
+def _provider_api_origin(value: str) -> str:
+    value = value.strip().rstrip('/')
+    parsed = urlparse(value)
+    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError('Informe a URL Server HTTPS do painel, sem usuário ou senha')
+    if parsed.port not in (None, 443) or parsed.path not in ('', '/') or parsed.query or parsed.fragment:
+        raise ValueError('A URL Server deve ser só a origem HTTPS, sem caminho, query ou fragmento')
+    return value
+
+
 class ZapiInstanceCreate(BaseModel):
     provider: str = Field(default='zapi', pattern=r'^(zapi|wame|wame_qr|wame_official)$')
     label: str = Field(min_length=2, max_length=120)
     instance_id: str = Field(min_length=3, max_length=160, pattern=r"^[A-Za-z0-9_-]+$")
     token: str = Field(min_length=4, max_length=512)
     client_token: str | None = Field(default=None, max_length=512)
+    api_base_url: str | None = Field(default=None, max_length=500)
 
     @model_validator(mode='after')
-    def wame_uses_only_the_instance_key(self):
+    def normalize_provider_credentials(self):
         if self.provider == 'wame' or self.provider.startswith('wame_'):
             self.client_token = None
+            if not self.api_base_url:
+                raise ValueError('Cole o Server do painel WAME')
+            self.api_base_url = _provider_api_origin(self.api_base_url)
+        else:
+            self.api_base_url = None
         return self
 
 

@@ -49,7 +49,7 @@ def _connection_profile(provider: str) -> dict:
 
 def _instance_read(row: ZapiInstance) -> dict:
     profile = _connection_profile(row.provider)
-    return {"id": row.id, "provider": row.provider, "connection_label": profile["connection_label"], "can_create_group": profile["can_create_group"], "label": row.label, "instance_id": row.instance_id, "status": row.status, "agent_id":row.agent_id, "global_sending_enabled":settings.outbound_enabled, "sending_enabled":row.sending_enabled, "messages_per_minute":row.messages_per_minute, "webhook_configured": row.webhook_configured, "credentials_configured": True, "created_at": row.created_at.isoformat()}
+    return {"id": row.id, "provider": row.provider, "connection_label": profile["connection_label"], "can_create_group": profile["can_create_group"], "label": row.label, "instance_id": row.instance_id, "api_base_url": row.api_base_url, "status": row.status, "agent_id":row.agent_id, "global_sending_enabled":settings.outbound_enabled, "sending_enabled":row.sending_enabled, "messages_per_minute":row.messages_per_minute, "webhook_configured": row.webhook_configured, "credentials_configured": True, "created_at": row.created_at.isoformat()}
 
 
 @router.get("/zapi/instances")
@@ -68,6 +68,7 @@ def create_instance(payload: ZapiInstanceCreate, request: Request, db: DbSession
         provider=payload.provider,
         label=payload.label.strip(),
         instance_id=payload.instance_id.strip(),
+        api_base_url=payload.api_base_url,
         token_encrypted=encrypt_secret(payload.token) or "",
         client_token_encrypted=encrypt_secret(payload.client_token),
         callback_token_hash=hash_callback_secret(callback_token),
