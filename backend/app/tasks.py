@@ -56,6 +56,18 @@ def _is_true(value):
     return value is True or (isinstance(value, str) and value.strip().lower() in {'true', '1', 'yes'})
 
 
+_checkpointer_ready = False
+
+
+def _ensure_checkpointer_schema(checkpointer):
+    # setup() runs CREATE INDEX CONCURRENTLY; calling it on every reply deadlocks under load.
+    global _checkpointer_ready
+    if _checkpointer_ready:
+        return
+    checkpointer.setup()
+    _checkpointer_ready = True
+
+
 def _graph_response(db, agent, conversation, instructions, history, thread_id, revision):
     def draft(state):
         return {'response': generate_with_fallback(db, agent, conversation, state['instructions'], state['history'], revision=revision)}
@@ -65,7 +77,7 @@ def _graph_response(db, agent, conversation, instructions, history, thread_id, r
     builder.add_edge('draft', END)
     conninfo = settings.database_url.replace('postgresql+psycopg://', 'postgresql://', 1)
     with PostgresSaver.from_conn_string(conninfo) as checkpointer:
-        checkpointer.setup()
+        _ensure_checkpointer_schema(checkpointer)
         graph = builder.compile(checkpointer=checkpointer)
         result = graph.invoke({'history': history, 'instructions': instructions, 'response': ''},
                               config={'configurable': {'thread_id': thread_id}})
