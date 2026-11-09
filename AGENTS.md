@@ -1,5 +1,15 @@
 # Orquestra — orientação de desenvolvimento
 
+- Antes de implementar, leia [`docs/ai/CONTINUITY_PROTOCOL.md`](docs/ai/CONTINUITY_PROTOCOL.md)
+  e [`docs/ai/CURRENT_STATE.md`](docs/ai/CURRENT_STATE.md); consulte decisões e handoffs
+  relevantes pelo índice [`docs/ai/HANDOFF_INDEX.md`](docs/ai/HANDOFF_INDEX.md).
+- Verifique o código e o Git atuais. Documentos e handoffs são evidências datadas,
+  não substitutos da inspeção da implementação.
+- Consulte handoffs relacionados; não invente componentes/contratos nem faça
+  refatorações não solicitadas. Mantenha mudanças pequenas e preserve compatibilidade,
+  avaliando todos os consumidores antes de alterar APIs.
+- Mudanças de autenticação, autorização, tenant, migrations, provedores, callbacks e
+  publicação exigem revisão específica dos riscos e das dependências.
 - Desenvolver em `/home/Alessandra/Documentos/orchestra-saas`. GitHub
   `franciscoqueirozdriver/orchestra-saas` compartilha o código. VPS `/opt/orquestra`
   é destino de publicação. Não usar sincronização reversa automática.
@@ -22,3 +32,7 @@
   antes de atribuir comportamento da aplicação ao arquivo mais recente na VPS.
 - Registrar diferenças, testes/limitações e efeito operacional em docs/consolidacao
   quando houver resgate/consolidação. Não guardar backups brutos nessa pasta.
+- Após trabalho relevante, atualize um handoff datado sem sobrescrever os anteriores;
+  mantenha decisões duradouras nos documentos canônicos de `docs/ai/`.
+- Execute as verificações pertinentes antes de concluir; relate somente testes
+  efetivamente executados, com resultado, e identifique o que ficou sem verificação.

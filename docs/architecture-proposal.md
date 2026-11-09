@@ -3,6 +3,12 @@
 **Data da proposta:** 29/10/2026  
 **Status:** arquitetura para validação do usuário; não implementada e não homologada com credenciais ou instância Z-API reais.
 
+> **Nota de continuidade (09/11/2026):** este documento é uma proposta histórica,
+> não descreve o transporte atual. A afirmação abaixo de exclusividade da Z-API foi
+> superada: o código no commit `40272d0` contém adaptadores Z-API e WAME. Consulte
+> [`docs/ai/CURRENT_STATE.md`](ai/CURRENT_STATE.md) para o estado do checkout e
+> [`docs/ai/DECISIONS.md`](ai/DECISIONS.md) para a precedência documental.
+
 ## 1. Objetivo, escopo e premissas
 
 Esta proposta descreve uma plataforma SaaS multiempresa para atendimento conversacional com agentes de IA, memória, recuperação de conhecimento, ferramentas e eventual intervenção humana. A **Z-API permanece o transporte exclusivo de WhatsApp**: toda entrada e saída WhatsApp passa pelo adaptador Z-API do backend. Não se propõe outra API, canal ou provedor de WhatsApp.
