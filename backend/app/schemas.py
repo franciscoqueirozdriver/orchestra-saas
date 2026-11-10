@@ -231,6 +231,17 @@ class ConversationProfile(BaseModel):
     part_chars: int = Field(default=1500, ge=300, le=4000)
     part_delay_seconds: int = Field(default=1, ge=0, le=5)
     presence: bool = False
+    humanized_delivery: bool = False
+    humanized_target_chars: int = Field(default=180, ge=100, le=180)
+    humanized_max_chars: int = Field(default=300, ge=180, le=300)
+    humanized_max_parts: int = Field(default=3, ge=1, le=3)
+    humanized_delay_seconds: int = Field(default=2, ge=1, le=5)
+
+    @model_validator(mode='after')
+    def valid_humanized_sizes(self):
+        if self.humanized_target_chars > self.humanized_max_chars:
+            raise ValueError('O tamanho-alvo não pode superar o tamanho máximo')
+        return self
 
     @field_validator('vocabulary','examples')
     @classmethod

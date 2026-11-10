@@ -24,7 +24,7 @@ from app.zapi_payload import contact_aliases, contact_key, from_me, classify
 from app.interventions import create_request, send_group_alert, private_claim, send_claim_reply, CLAIM_COMMAND
 from app.models import OutboxPart, ConversationTurn
 from app.conversation.service import profile_for, invalidate, action
-from app.conversation.behavior import command, wait_remaining, transition, style_instructions, output_guard, split_reply, aware, is_clarification, CLARIFICATION_LIMIT_REPLY
+from app.conversation.behavior import command, wait_remaining, transition, style_instructions, output_guard, split_reply, split_reply_conversational, aware, is_clarification, CLARIFICATION_LIMIT_REPLY
 
 logger = logging.getLogger(__name__)
 celery_app = Celery('orquestra', broker=settings.redis_url)
@@ -91,6 +91,16 @@ def _finalize_event(db, event, *, error=None):
 
 def _schedule_reply(tenant_id, conversation_id, revision):
     respond_to_conversation.apply_async(args=[tenant_id, conversation_id, revision], countdown=settings.message_group_window_seconds)
+
+
+def _preempted_webhook_pending(db, conversation):
+    return db.query(WebhookEvent.id).filter(
+        WebhookEvent.tenant_id == conversation.tenant_id,
+        WebhookEvent.instance_id == conversation.instance_id,
+        WebhookEvent.event_type == 'ReceivedCallback',
+        WebhookEvent.processed.is_(False),
+        WebhookEvent.payload['_preempted_conversation_id'].as_string() == conversation.id,
+    ).first() is not None
 
 
 @celery_app.task(name='app.tasks.process_webhook_event')
@@ -175,7 +185,9 @@ def process_webhook_event(event_id):
                 db.add(Message(tenant_id=event.tenant_id, conversation_id=conversation.id, external_id=event.event_key,
                                direction=direction, kind=kind, content=content if kind == 'text' else f'[{kind} recebida — mídia não processada]',
                                status='sent' if own else 'received',author_kind='operator' if own else 'user',created_at=received_now))
-                invalidate(db,conversation,'new_incoming' if not own else 'external_takeover')
+                preempted_at_ingress=payload.get('_preempted_conversation_id')==conversation.id
+                if not preempted_at_ingress:
+                    invalidate(db,conversation,'new_incoming' if not own else 'external_takeover')
                 conversation.last_message_at = received_now
                 if own:
                     conversation.status = 'human'  # An uncorrelated device message is a human intervention.
@@ -317,6 +329,8 @@ def respond_to_conversation(tenant_id, conversation_id, expected_revision):
                 conversation = db.query(Conversation).filter_by(id=conversation_id, tenant_id=tenant_id).first()
                 if not conversation:
                     return 'stale_revision'
+                if _preempted_webhook_pending(db,conversation):
+                    return 'inbound_event_pending'
                 if conversation.revision != expected_revision:
                     candidate_instance=db.query(ZapiInstance).filter_by(id=conversation.instance_id,tenant_id=tenant_id).first()
                     candidate_agent=db.query(Agent).filter_by(id=candidate_instance.agent_id,tenant_id=tenant_id).first() if candidate_instance and candidate_instance.agent_id else None
@@ -373,9 +387,25 @@ def respond_to_conversation(tenant_id, conversation_id, expected_revision):
                         "limit_notified":answer==CLARIFICATION_LIMIT_REPLY}
                     conversation.context_expires_at=datetime.now(timezone.utc)+timedelta(minutes=profile.context_minutes)
                     conversation.turn_started_at=None
+                parts = None
+                delivery_config = None
+                if profile.enabled:
+                    if profile.humanized_delivery:
+                        parts = split_reply_conversational(
+                            answer,
+                            target_chars=profile.humanized_target_chars,
+                            max_chars=profile.humanized_max_chars,
+                            max_parts=profile.humanized_max_parts,
+                        )
+                        delay_seconds = profile.humanized_delay_seconds
+                        logger.info('humanized_reply_prepared tenant=%s conversation=%s parts=%s lengths=%s',
+                                    tenant_id, conversation_id, len(parts), [len(part) for part in parts])
+                    else:
+                        parts = split_reply(answer, profile.part_chars)
+                        delay_seconds = profile.part_delay_seconds
+                    delivery_config = {'delay': delay_seconds, 'presence': profile.presence}
                 enqueue(db, instance, conversation, answer, revision=expected_revision,
-                        parts=split_reply(answer,profile.part_chars) if profile.enabled else None,
-                        delivery_config={'delay':profile.part_delay_seconds,'presence':profile.presence} if profile.enabled else None)
+                        parts=parts, delivery_config=delivery_config)
                 return 'reply_queued'
         except ValueError:
             logger.warning('Geração não concluída (invalid_output)')

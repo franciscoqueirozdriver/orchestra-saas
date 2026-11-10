@@ -11,6 +11,7 @@ segurança completa nem declaração de vulnerabilidade confirmada.
 | Conectores WhatsApp | Z-API e WAME têm APIs, callbacks, políticas e semânticas externas diferentes | Testes simulados não equivalem a homologação; conferir contrato atual e usar conta/número de teste autorizado |
 | Grupo/intervenção | Código de aceite, números autorizados, mensagem privada, grupo e envio são ações sensíveis | Revisar autorização, expiração, concorrência, redaction e falha ambígua; mensagens de teste exigem consentimento operacional explícito |
 | Outbox e scheduler | Estado persistente e efeito no fornecedor podem divergir em timeout ou crash | Revisar idempotência, reconciliação, lease/lock e estados `unknown`; evitar retry cego |
+| Interrupção entre partes | Na branch local, callback durável e dispatcher serializam pelo lock de tenant; evento, invalidação e cancelamento de partes pendentes são atômicos para conversas resolvidas sem ambiguidade. A geração também aguarda eventos preemptivos não processados. O lock durante I/O externo pode atrasar webhooks da mesma empresa | Manter teste determinístico de webhook persistido com worker pendente, teste concorrente e redelivery; chamada externa iniciada antes do aceite durável não é cancelável, e contato/alias ambíguo não preempta conversa por inferência; medir atrasos sob latência do provedor |
 | Checkpointer | `checkpointer.setup()` pode criar estruturas/index e comportamento varia sob concorrência | Preservar cache de inicialização e o teste/commit corretivo; não recolocar setup por resposta sem avaliar locks/DDL |
 | Provedores LLM/embeddings | Chaves, endpoint SSRF, limites, fallback e formato de resposta afetam dados e custos | Revisar `url_safety.py`, protocolo, dimensões, limites, retenção e destino de dados; não presumir sucesso porque a conexão foi salva |
 | Dados de conversa | Histórico contém dados pessoais; originais privados não são conhecimento aprovado | Não abrir/copiar/exportar material privado para Git, logs, prompts ou fixtures; manter isolamento, retenção e aprovação |
@@ -19,8 +20,11 @@ segurança completa nem declaração de vulnerabilidade confirmada.
 | Mídia | `MEDIA_DIR` persistente e processadores de upload carregam risco de privacidade, tamanho e conteúdo hostil | Conferir limites, tipo real, armazenamento/retention, permissões e tenant; não anexar acervo real a testes |
 | Docs sobre produção | Handoffs são snapshots com datas; código local posterior não prova estado remoto | Consultar VPS/CI apenas com escopo e autorização adequados; rotular sem confirmação como desconhecido |
 
-## Estado de execução nesta auditoria
+## Validação local da branch de envio humanizado — 2026-11-10
 
-Nenhum teste foi executado nesta tarefa. Existem testes em `tests/`; os resultados
-antigos citados em `docs/consolidacao/` e `docs/handoff/` pertencem aos SHAs e datas
-registrados ali e não devem ser promovidos a resultado do commit `40272d0`.
+Na branch `feat/humanized-whatsapp-delivery`, os testes unitários passaram (149) em
+container sem rede; os testes de integração passaram (57) usando PostgreSQL descartável
+e `MEDIA_DIR` temporário. Isso valida os cenários simulados no checkout local, não
+homologa WAME/Z-API nem demonstra o estado da VPS. A suíte não elimina a limitação de
+cancelamento de chamadas externas já iniciadas nem resolve associação de contato
+ambígua.

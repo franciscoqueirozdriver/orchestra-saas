@@ -18,6 +18,7 @@ peça decisão; não inferir autorização a partir de um plano.
 | Migrations Alembic são a cadeia do banco da aplicação; SQL sob `docs/intencoes/` é proposta | `backend/migrations/versions/`, `AGENTS.md`, docs de consolidação | Não importar migrations propostas para Alembic nem editar revisão histórica sem análise específica |
 | API/worker/scheduler usam imagem; frontend/Caddy são mounts no Compose | `docker-compose.yml`, `Dockerfile` | Um arquivo Python no checkout da VPS não prova que está rodando; conferir SHA da imagem e binds |
 | Saída de mensagens inicia suspensa no helper de release | `scripts/release.py`, `docs/consolidacao/2026-11-05-revisao-pr1.md` | Não habilitar envio como efeito incidental de deploy; piloto precisa de autorização operacional própria |
+| Entrega conversacional é opt-in por agente, usa as partes duráveis existentes e tem limites rígidos de 3 blocos/300 caracteres; resposta que exceder os limites é escalada, não truncada | `backend/app/schemas.py`, `conversation/behavior.py`, `tasks.py`, `outbox.py`; implementação local em `feat/humanized-whatsapp-delivery` | Não ativar em perfis legados implicitamente; manter rate limit, revisão por parte e `unknown`; presença permanece desativada até homologação |
 
 ## Decisões antigas ou documentos de proposta
 

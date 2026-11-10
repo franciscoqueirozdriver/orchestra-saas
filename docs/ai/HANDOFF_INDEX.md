@@ -9,6 +9,7 @@ não os transforma em retrato atual. Atualize-o ao adicionar handoffs relevantes
 |---|---|---|
 | [`docs/handoff/2026-11-06-publicacao-e-ingestao.md`](../handoff/2026-11-06-publicacao-e-ingestao.md) | Publicação autorizada, pipeline privado e importação histórica; inclui números e estado operacional datados | Fonte histórica detalhada; não tomar SHA/revisão/serviços como atuais sem conferência |
 | [`docs/handoff/2026-11-09-auditoria-continuidade.md`](../handoff/2026-11-09-auditoria-continuidade.md) | Auditoria deste snapshot, documentos examinados, divergências e validação da documentação | Usar para entender origem dos arquivos canônicos desta auditoria |
+| [`docs/handoff/2026-11-10-envio-humanizado.md`](../handoff/2026-11-10-envio-humanizado.md) | Implementação local opt-in de respostas em blocos via outbox, testes e limitações do ambiente | Conferir branch e estado Git no próprio handoff; não representa publicação ou homologação |
 
 O handoff de 06/11 evoluiu em commits `d8d04b3`, `a07dc7d` e `621d926` (importação
 histórica), culminando no arquivo atual. Use `git show <commit>:<caminho>` se for

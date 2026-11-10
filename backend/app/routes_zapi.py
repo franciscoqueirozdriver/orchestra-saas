@@ -9,13 +9,15 @@ from sqlalchemy.exc import IntegrityError
 from app.config import settings
 from app.dependencies import CurrentUser, DbSession, TenantId
 from app.outbound_control import outbound_is_enabled
-from app.models import Agent, Conversation, Message, OutboxMessage, User, ZapiInstance, InterventionRequest
+from app.models import Agent, Conversation, ConversationContactAlias, Message, OutboxMessage, OutboxPart, User, ZapiInstance, InterventionRequest
+from app.locks import tenant_guard
+from app.conversation.service import invalidate
 from app.schemas import SendTextRequest, ZapiInstanceCreate, InstancePolicyUpdate, InterventionRoutingUpdate, InterventionGroupCreate, InterventionGroupConfirmation
 from app.security import callback_secret_matches, decrypt_secret, encrypt_secret, hash_callback_secret
 from app.transport import client_for, is_wame_provider
 from app.wame_payload import is_wame_envelope, normalize_wame_events
 from app.zapi_client import ZapiError
-from app.zapi_payload import classify, contact_key, contact_name, event_key
+from app.zapi_payload import classify, contact_aliases, contact_key, contact_name, event_key, from_me
 from app.interventions import group_client
 
 logger = logging.getLogger(__name__)
@@ -212,7 +214,66 @@ async def receive_zapi_webhook(instance_id: str, callback_token: str, request: R
     return _accept_event(db, row, payload)
 
 
+def _preempt_conversation_for_event(db, row: ZapiInstance, event) -> bool:
+    """Invalidate an existing conversation atomically with durable webhook acceptance."""
+    payload = event.payload or {}
+    if event.event_type != 'ReceivedCallback' or payload.get('_preempted_conversation_id'):
+        return False
+    if payload.get('isGroup') is True or str(payload.get('isGroup') or '').strip().lower() in {'true', '1'}:
+        return False
+
+    own = from_me(payload)
+    if own:
+        # A correlated echo is our already-sent message, not a human takeover.
+        correlated = db.query(OutboxMessage).filter_by(
+            tenant_id=row.tenant_id, instance_id=row.id, external_message_id=event.event_key
+        ).first()
+        if not correlated:
+            correlated = db.query(OutboxPart).join(
+                OutboxMessage, OutboxMessage.id == OutboxPart.outbox_id
+            ).filter(
+                OutboxPart.tenant_id == row.tenant_id,
+                OutboxMessage.instance_id == row.id,
+                OutboxPart.external_message_id == event.event_key,
+            ).first()
+        if correlated:
+            return False
+
+    contact = contact_key(payload).strip()
+    if not contact:
+        return False
+    conversation = db.query(Conversation).filter_by(
+        tenant_id=row.tenant_id, instance_id=row.id, contact_key=contact
+    ).first()
+    if conversation is None:
+        aliases = set(contact_aliases(payload))
+        if aliases:
+            matched = db.query(ConversationContactAlias.conversation_id).filter(
+                ConversationContactAlias.tenant_id == row.tenant_id,
+                ConversationContactAlias.instance_id == row.id,
+                ConversationContactAlias.contact_key.in_(aliases),
+            ).distinct().all()
+            conversation_ids = {item[0] for item in matched}
+            if len(conversation_ids) == 1:
+                conversation = db.query(Conversation).filter_by(
+                    id=next(iter(conversation_ids)), tenant_id=row.tenant_id,
+                    instance_id=row.id,
+                ).first()
+    if conversation is None:
+        return False
+
+    reason = 'external_takeover' if own else 'new_incoming'
+    invalidate(db, conversation, reason)
+    event.payload = {
+        **payload,
+        '_preempted_conversation_id': conversation.id,
+        '_preempt_reason': reason,
+    }
+    return True
+
+
 def _accept_event(db, row: ZapiInstance, payload: dict) -> dict:
+    """Deduplicate and persist a callback under the same tenant lock as outbox dispatch."""
     if payload.get('type') == 'MessageStatusCallback':
         if not isinstance(payload.get('ids'), list) or not payload['ids'] or len(payload['ids']) > 1000 or any(not isinstance(i, (str, int)) or isinstance(i, bool) or len(str(i)) > 180 for i in payload['ids']):
             raise HTTPException(422, detail='Callback de status requer ids válidos')
@@ -221,29 +282,55 @@ def _accept_event(db, row: ZapiInstance, payload: dict) -> dict:
     key = event_key(payload)
     event_type = str(payload.get("type") or "unknown")[:80]
     from app.models import WebhookEvent
-    existing = db.query(WebhookEvent).filter(WebhookEvent.instance_id == row.id, WebhookEvent.event_key == key, WebhookEvent.event_type == event_type).first()
-    if existing:
-        if not existing.processed:
+    event_id = None
+    duplicate = False
+    with tenant_guard(row.tenant_id):
+        existing = db.query(WebhookEvent).filter(
+            WebhookEvent.tenant_id == row.tenant_id,
+            WebhookEvent.instance_id == row.id,
+            WebhookEvent.event_key == key,
+            WebhookEvent.event_type == event_type,
+        ).first()
+        if existing:
+            duplicate = True
+            if not existing.processed:
+                changed = _preempt_conversation_for_event(db, row, existing)
+                if changed:
+                    db.commit()
+                event_id = existing.id
+        else:
+            event = WebhookEvent(tenant_id=row.tenant_id, instance_id=row.id,
+                                 event_key=key, event_type=event_type,
+                                 payload=_minimize_payload(payload))
+            db.add(event)
             try:
-                from app.tasks import process_webhook_event
-                process_webhook_event.delay(existing.id)
-            except Exception:
-                logger.warning("Evento de conexão %s ainda não processado; reenvio para worker falhou", existing.id)
-        return {"accepted": True, "duplicate": True}
-    event = WebhookEvent(tenant_id=row.tenant_id, instance_id=row.id, event_key=key, event_type=event_type, payload=_minimize_payload(payload))
-    db.add(event)
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        return {"accepted": True, "duplicate": True}
-    db.refresh(event)
-    try:
-        from app.tasks import process_webhook_event
-        process_webhook_event.delay(event.id)
-    except Exception:
-        logger.warning("Evento de conexão %s persistido, mas não despachado; verificar worker/broker", event.id)
-    return {"accepted": True, "duplicate": False}
+                db.flush()
+                _preempt_conversation_for_event(db, row, event)
+                db.commit()
+                event_id = event.id
+            except IntegrityError:
+                db.rollback()
+                existing = db.query(WebhookEvent).filter(
+                    WebhookEvent.tenant_id == row.tenant_id,
+                    WebhookEvent.instance_id == row.id,
+                    WebhookEvent.event_key == key,
+                    WebhookEvent.event_type == event_type,
+                ).first()
+                duplicate = True
+                if existing and not existing.processed:
+                    if _preempt_conversation_for_event(db, row, existing):
+                        db.commit()
+                    event_id = existing.id
+
+    # Do not enqueue while holding the tenant lock: the worker takes the same lock.
+    # If the broker is unavailable, the committed event remains recoverable by scheduler.
+    if event_id:
+        try:
+            from app.tasks import process_webhook_event
+            process_webhook_event.delay(event_id)
+        except Exception:
+            logger.warning("Evento de conexão %s persistido, mas não despachado; verificar worker/broker", event_id)
+    return {"accepted": True, "duplicate": duplicate}
 
 
 @router.patch("/zapi/instances/{internal_id}/policy")

@@ -1,6 +1,8 @@
 # Intenções — trazer o atendimento natural do A Mesa para o Orquestra
 
-Data: 03/11/2026. Status: proposta documentada, sem alteração do runtime ou banco.
+Data: 03/11/2026. Status: proposta original; C02 recebeu uma implementação inicial local
+na branch `feat/humanized-whatsapp-delivery` em 10/11/2026. Não representa merge,
+deploy ou homologação. As demais intenções continuam exigindo verificação individual.
 Responsabilidade: evolução do atendimento conversacional, preservando isolamento entre empresas.
 
 ## Decisão e resultado esperado

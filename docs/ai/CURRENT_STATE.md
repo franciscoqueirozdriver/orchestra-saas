@@ -1,6 +1,6 @@
 # Estado atual comprovado no repositório
 
-**Snapshot:** 09/11/2026, `main` e `origin/main` em `40272d0` (`Evita deadlock do
+**Snapshot de referência:** 09/11/2026, `main` e `origin/main` em `40272d0` (`Evita deadlock do
 checkpointer ao gerar respostas.`). Git exibia dois caminhos não rastreados locais:
 `Kit Marca/` e `docs/conhecimento/base-atendimento-climatiza-brasil.md`. Seus conteúdos
 foram preservados e não foram inspecionados nem adicionados. Nenhuma alteração foi
@@ -33,6 +33,7 @@ homologação de fornecedor.
 | Pipeline privado de conversas | Implementado como ferramentas locais | `scripts/private_knowledge/`, `docs/conhecimento/ingestao-local-whatsapp.md` | Não é parte do serviço da aplicação; material bruto não foi examinado nesta auditoria |
 | Grupo de atendimento | Implementado no código; homologação pendente | `interventions.py`, `routes_zapi.py`, migration `0009`, `docs/intervencao-humana-grupo.md` | Envio de teste é externo e real; estado `validated` é confirmação organizacional, não confirmação de leitura fornecida pela API |
 | Conversas importadas como base de busca | Não automático; fluxos separados | histórico em `messages`; conhecimento indexado em `knowledge_documents/chunks` | Não assumir que histórico foi indexado ou que conversa histórica virou regra |
+| Envio humanizado em blocos | Implementado localmente e testado em containers, opt-in, sem homologação externa | branch `feat/humanized-whatsapp-delivery`: `split_reply_conversational`, `humanized_delivery`, partes do outbox existente; em 10/11/2026, 149 testes unitários e 57 de integração passaram, além de UI sintética anterior | Perfis existentes não ativam a opção; respostas acima do limite seguro escalam para intervenção; composing segue desativado; evento duravelmente aceito e associado sem ambiguidade preempta partes ainda pendentes e bloqueia geração até processamento assíncrono; chamada externa já iniciada e identidade não resolvida continuam limites; não foi feito deploy |
 | Integração com Instagram, billing SaaS, ferramentas MCP/CRM/agenda, multiagente | Planejado ou não verificado | `TODO.md`, `docs/intencoes/`, documentação de contratação | Documentação/proposta não demonstra implementação |
 
 ## Banco e migrations
@@ -67,3 +68,19 @@ O estado atual do GitHub remoto não foi consultado pela rede. O estado do check
 imagens, banco e serviços da VPS também não foi consultado. O handoff de 06/11 descreve
 uma publicação no estado de então; os commits posteriores tornam inadequado tratá-lo
 como fotografia atual.
+
+## Trabalho em andamento — branch local
+
+Em `feat/humanized-whatsapp-delivery`, o código de segmentação e configuração está
+alterado localmente sobre `6cd1abe`. A implementação reutiliza `outbox_parts` e não
+adiciona migration. Ver `docs/handoff/2026-11-10-envio-humanizado.md` para os arquivos,
+verificações efetuadas e limitações do ambiente de testes. Suítes unitária (149) e de
+integração (57) passaram em containers locais; o teste de UI sintético havia passado na
+verificação anterior. Homologação externa não foi executada. O prompt de agentes com
+envio humanizado orienta resposta concisa e completa na primeira geração; excesso ainda
+escala sem uma segunda geração. A entrada e o dispatcher compartilham lock de tenant:
+evento, incremento de revisão e cancelamento de partes pendentes são transacionais; o
+worker reconhece o marcador interno para não repetir a invalidação. A chamada externa
+que já iniciou não é cancelável e uma identidade de contato ambígua não é atribuída por
+inferência. `respond_to_conversation` aguarda se há evento preemptivo ainda não
+processado para a conversa. Não houve commit, publicação ou alteração na VPS.
