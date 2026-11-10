@@ -65,7 +65,7 @@ const server=http.createServer((req,res)=>{const f=files[req.url];if(!f){res.wri
   for(const id of ['connection-3','connection-4']){await page.locator('#agent-model-alternative').selectOption(id);await page.getByRole('button',{name:'Adicionar alternativa',exact:true}).click();}
   await page.getByRole('button',{name:'Subir alternativa 2',exact:true}).click();await page.getByRole('button',{name:'Salvar agente',exact:true}).click();await page.waitForFunction(()=>!document.querySelector('#modal').open);
   assert.equal(agent.llm_config_id,'connection-2');assert.deepEqual(agent.fallback_config_ids,['connection-4','connection-3']);assert.equal(agent.auto_reply_enabled,false);
-  await page.locator('[data-route="model"]').click();page.once('dialog',d=>d.accept());await page.locator('tr').filter({hasText:'Router fictício'}).getByRole('button',{name:'Excluir',exact:true}).click();await page.getByText('Conexão em uso por agente',{exact:true}).waitFor();assert.equal(rows.length,5);
+  await page.locator('[data-route="model"]').click();await page.locator('tr').filter({hasText:'Router fictício'}).getByRole('button',{name:'Excluir',exact:true}).click();await page.locator('#confirm-dialog').waitFor({state:'visible'});await page.locator('#confirm-ok').click();await page.getByText('Conexão em uso por agente',{exact:true}).waitFor();assert.equal(rows.length,5);
   assert.equal(mutations.some(m=>m.endpoint==='/llm/config'),false);assert.equal(external.length,0);assert.equal(errors.length,0,errors.join(';'));
   assert.ok(!(await page.locator('body').innerText()).includes('synthetic-google-key'));
   console.log('UI provedores aprovada: Gemini/Mistral/OpenRouter/personalizado, múltiplas conexões, edição sem chave, vínculos ordenados e exclusão protegida.');
