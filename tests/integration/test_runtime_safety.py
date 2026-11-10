@@ -457,6 +457,68 @@ def test_core_groups_fragmented_input_and_persists_context(runtime,monkeypatch):
     assert runtime.tasks.respond_to_conversation.run('tenant-a','conversation-a',3)=='already_enqueued'
 
 
+def test_core_humanized_profile_persists_bounded_parts_and_delay(runtime,monkeypatch):
+    from app.models import Agent,Conversation,OutboxMessage,OutboxPart
+    from app.schemas import ConversationProfile
+    core(runtime,monkeypatch)
+    scheduled=[]
+    monkeypatch.setattr(runtime.tasks.dispatch_outbox,'apply_async',lambda *args,**kwargs:scheduled.append((args,kwargs)))
+    monkeypatch.setattr('app.zapi_client.ZapiClient.send_text',lambda *args:{'messageId':'synthetic-humanized-part'})
+    with runtime.db() as db:
+        db.get(Agent,'agent-a').conversation_profile=ConversationProfile(
+            enabled=True,humanized_delivery=True,humanized_delay_seconds=3,
+        ).model_dump()
+        db.commit()
+    text=('A Climatiza Brasil atende empresas com soluções para diferentes ambientes e ajuda a identificar '
+          'uma alternativa adequada para cada espaço. Para entender seu caso, qual é a metragem aproximada '
+          'do ambiente? Podemos verificar uma visita para avaliação?')
+    monkeypatch.setattr(runtime.tasks,'_graph_response',lambda *args:text)
+    runtime.tasks.process_webhook_event.run(event(runtime,'humanized-input',payload={
+        'phone':'synthetic-contact','normalizedKind':'text','normalizedText':'Preciso climatizar minha empresa.'
+    }))
+    with runtime.db() as db:revision=db.get(Conversation,'conversation-a').revision
+    assert runtime.tasks.respond_to_conversation.run('tenant-a','conversation-a',revision)=='reply_queued'
+    with runtime.db() as db:
+        parent=db.query(OutboxMessage).filter_by(tenant_id='tenant-a',conversation_id='conversation-a').one()
+        parts=db.query(OutboxPart).filter_by(tenant_id='tenant-a',outbox_id=parent.id).order_by(OutboxPart.ordinal).all()
+        assert 1<len(parts)<=3
+        assert ''.join(part.content for part in parts)==text
+        assert all(len(part.content)<=300 for part in parts)
+        assert parent.delivery_config['delay']==3
+        parent_id=parent.id
+    assert runtime.outbox.dispatch(parent_id)=='part_accepted'
+    assert scheduled[-1][1]['countdown']==3
+
+
+def test_core_humanized_overflow_pauses_and_escalates_without_partial_reply(runtime,monkeypatch):
+    from app.models import Agent,Conversation,InterventionRequest,OutboxMessage,OutboxPart
+    from app.schemas import ConversationProfile
+    core(runtime,monkeypatch)
+    with runtime.db() as db:
+        db.get(Agent,'agent-a').conversation_profile=ConversationProfile(
+            enabled=True,humanized_delivery=True,
+        ).model_dump()
+        db.commit()
+    answer=' '.join(
+        f'Para a etapa número {i}, a equipe avalia as condições do ambiente e confirma os dados relevantes.'
+        for i in range(1,10)
+    )
+    monkeypatch.setattr(runtime.tasks,'_graph_response',lambda *args:answer)
+    runtime.tasks.process_webhook_event.run(event(runtime,'humanized-overflow-input',payload={
+        'phone':'synthetic-contact','normalizedKind':'text','normalizedText':'Quero climatizar a empresa.'
+    }))
+    with runtime.db() as db:revision=db.get(Conversation,'conversation-a').revision
+    assert runtime.tasks.respond_to_conversation.run('tenant-a','conversation-a',revision)=='intervention_requested'
+    with runtime.db() as db:
+        conversation=db.get(Conversation,'conversation-a')
+        assert conversation.status=='human' and conversation.pause_reason=='intervention_requested'
+        assert db.query(InterventionRequest).filter_by(tenant_id='tenant-a',conversation_id='conversation-a').count()==1
+        messages=db.query(OutboxMessage).filter_by(tenant_id='tenant-a',conversation_id='conversation-a').all()
+        assert len(messages)==1 and answer not in messages[0].content
+        assert 'automação foi pausada' in messages[0].content
+        assert db.query(OutboxPart).filter_by(tenant_id='tenant-a').count()==0
+
+
 def test_core_cancel_and_human_commands_preempt_generation(runtime,monkeypatch):
     from app.models import Conversation, OutboxMessage, ConversationAction
     core(runtime,monkeypatch)
@@ -539,6 +601,129 @@ def test_core_takeover_between_parts_preserves_first_and_cancels_rest(runtime,mo
     assert runtime.outbox.dispatch(queued)=='ignored'
 
 
+def test_core_new_inbound_between_parts_cancels_obsolete_reply(runtime,monkeypatch):
+    from app.models import OutboxPart
+    queued=multipart(runtime,monkeypatch)
+    monkeypatch.setattr('app.zapi_client.ZapiClient.send_text',lambda *a:{'messageId':'first-before-new-input'})
+    assert runtime.outbox.dispatch(queued)=='part_accepted'
+    runtime.tasks.process_webhook_event.run(event(runtime,'new-input-between-parts',payload={
+        'phone':'synthetic-contact','normalizedKind':'text','normalizedText':'Uma nova informação.'
+    }))
+    with runtime.db() as db:
+        states=[part.status for part in db.query(OutboxPart).filter_by(outbox_id=queued).order_by(OutboxPart.ordinal)]
+        assert states==['accepted','cancelled']
+    assert runtime.outbox.dispatch(queued)=='ignored'
+
+
+def test_durable_webhook_preempts_pending_part_before_async_processing(runtime,api,monkeypatch):
+    from app.models import Conversation,OutboxMessage,OutboxPart,WebhookEvent
+    queued=multipart(runtime,monkeypatch);calls=[]
+    monkeypatch.setattr('app.zapi_client.ZapiClient.send_text',lambda self,destination,content:(calls.append(content) or {'messageId':'synthetic-first-part'}))
+    assert runtime.outbox.dispatch(queued)=='part_accepted'
+    body={'instanceId':'external-a','type':'ReceivedCallback','messageId':'synthetic-durable-inbound',
+          'phone':'synthetic-contact','text':{'message':'Nova informação fictícia.'}}
+    path='/api/webhooks/zapi/external-a/test-only-callback-secret'
+    response=api.post(path,json=body)
+    assert response.status_code==202 and response.json()['duplicate'] is False
+    # The event is durably accepted, but its Celery task is still pending.
+    with runtime.db() as db:
+        pending_event=db.query(WebhookEvent).filter_by(event_key='synthetic-durable-inbound').one()
+        assert pending_event.processed is False
+    assert runtime.outbox.dispatch(queued)=='ignored'
+    generated=[]
+    monkeypatch.setattr(runtime.tasks,'_graph_response',lambda *args:generated.append(True) or 'resposta obsoleta fictícia')
+    assert runtime.tasks.respond_to_conversation.run('tenant-a','conversation-a',2)=='inbound_event_pending'
+    assert generated==[]
+    with runtime.db() as db:
+        event_row=db.query(WebhookEvent).filter_by(event_key='synthetic-durable-inbound').one()
+        conversation=db.get(Conversation,'conversation-a')
+        parent=db.get(OutboxMessage,queued)
+        parts=db.query(OutboxPart).filter_by(outbox_id=queued).order_by(OutboxPart.ordinal).all()
+        assert event_row.processed is False  # Celery is still pending.
+        assert event_row.payload['_preempted_conversation_id']=='conversation-a'
+        assert conversation.revision==2
+        assert parent.status=='cancelled'
+        assert [part.status for part in parts]==['accepted','cancelled']
+        event_id=event_row.id
+    assert calls==['Parte um. ']
+
+    # Provider redelivery requeues processing but cannot invalidate the same turn twice.
+    duplicate=api.post(path,json=body)
+    assert duplicate.status_code==202 and duplicate.json()['duplicate'] is True
+    with runtime.db() as db:assert db.get(Conversation,'conversation-a').revision==2
+    assert runtime.tasks.process_webhook_event.run(event_id)=='message_stored_and_reply_queued'
+    with runtime.db() as db:
+        assert db.get(Conversation,'conversation-a').revision==2
+        assert db.get(WebhookEvent,event_id).processed is True
+
+
+def test_webhook_waits_for_already_started_provider_call_then_preempts_next_turn(runtime,api,monkeypatch):
+    import app.routes_zapi as routes_zapi
+    from app.models import Conversation,WebhookEvent
+    queued=multipart(runtime,monkeypatch)
+    send_started,release_send,ingress_waiting=threading.Event(),threading.Event(),threading.Event()
+    calls=[]
+    def send(self,destination,content):
+        calls.append(content)
+        if content=='Parte um. ':
+            return {'messageId':'synthetic-first-part'}
+        send_started.set()
+        assert release_send.wait(10)
+        return {'messageId':'synthetic-second-part'}
+    monkeypatch.setattr('app.zapi_client.ZapiClient.send_text',send)
+    assert runtime.outbox.dispatch(queued)=='part_accepted'
+    original_guard=routes_zapi.tenant_guard
+    def observed_guard(tenant_id,**kwargs):
+        ingress_waiting.set()
+        return original_guard(tenant_id,**kwargs)
+    monkeypatch.setattr(routes_zapi,'tenant_guard',observed_guard)
+    body={'instanceId':'external-a','type':'ReceivedCallback','messageId':'synthetic-inbound-during-send',
+          'phone':'synthetic-contact','text':{'message':'Mensagem durante envio fictícia.'}}
+    path='/api/webhooks/zapi/external-a/test-only-callback-secret'
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        dispatch_future=pool.submit(runtime.outbox.dispatch,queued)
+        assert send_started.wait(5)
+        webhook_future=pool.submit(api.post,path,json=body)
+        try:
+            assert ingress_waiting.wait(5)
+            assert not webhook_future.done()
+            with runtime.db() as db:assert db.query(WebhookEvent).filter_by(event_key='synthetic-inbound-during-send').count()==0
+        finally:
+            release_send.set()
+        assert dispatch_future.result(timeout=10)=='accepted'
+        response=webhook_future.result(timeout=10)
+    assert response.status_code==202
+    with runtime.db() as db:
+        conversation=db.get(Conversation,'conversation-a')
+        assert conversation.revision==2
+        assert db.query(WebhookEvent).filter_by(event_key='synthetic-inbound-during-send',processed=False).count()==1
+    assert calls==['Parte um. ','Parte dois.']
+
+
+def test_device_manual_message_preempts_pending_part_at_durable_ingress(runtime,api,monkeypatch):
+    from app.models import Conversation,OutboxPart,WebhookEvent
+    queued=multipart(runtime,monkeypatch);calls=[]
+    monkeypatch.setattr('app.zapi_client.ZapiClient.send_text',lambda self,destination,content:(calls.append(content) or {'messageId':'synthetic-first-part'}))
+    assert runtime.outbox.dispatch(queued)=='part_accepted'
+    body={'instanceId':'external-a','type':'ReceivedCallback','messageId':'synthetic-manual-device-reply',
+          'phone':'synthetic-contact','fromMe':True,'text':{'message':'Resposta manual fictícia.'}}
+    response=api.post('/api/webhooks/zapi/external-a/test-only-callback-secret',json=body)
+    assert response.status_code==202
+    with runtime.db() as db:
+        conversation=db.get(Conversation,'conversation-a')
+        event_row=db.query(WebhookEvent).filter_by(event_key='synthetic-manual-device-reply').one()
+        assert conversation.revision==2 and conversation.status=='open'
+        assert event_row.processed is False
+        assert db.query(OutboxPart).filter_by(outbox_id=queued,status='cancelled').count()==1
+    assert runtime.outbox.dispatch(queued)=='ignored'
+    assert calls==['Parte um. ']
+    assert runtime.tasks.process_webhook_event.run(event_row.id)=='stored_no_auto_reply'
+    with runtime.db() as db:
+        conversation=db.get(Conversation,'conversation-a')
+        assert conversation.revision==2
+        assert conversation.status=='human' and conversation.pause_reason=='external_takeover'
+
+
 def test_core_uncertain_part_stops_following_parts(runtime,monkeypatch):
     from app.zapi_client import ZapiError
     from app.models import OutboxPart
@@ -550,6 +735,30 @@ def test_core_uncertain_part_stops_following_parts(runtime,monkeypatch):
     assert runtime.outbox.dispatch(queued)=='ignored'
     assert calls==[1]
     with runtime.db() as db:assert [p.status for p in db.query(OutboxPart).order_by(OutboxPart.ordinal)]==['unknown','pending']
+
+
+def test_core_unknown_middle_part_does_not_send_third_part(runtime,monkeypatch):
+    from app.models import ZapiInstance,Conversation,OutboxPart
+    from app.zapi_client import ZapiError
+    core(runtime,monkeypatch);calls=[]
+    with runtime.db() as db:
+        queued=runtime.outbox.enqueue(
+            db,db.get(ZapiInstance,'instance-a'),db.get(Conversation,'conversation-a'),
+            'Parte um. Parte dois. Parte três.',revision=1,
+            parts=['Parte um. ','Parte dois. ','Parte três.'],delivery_config={'delay':0},
+        ).id
+    def send(self,destination,content):
+        calls.append(content)
+        if content.startswith('Parte dois'):
+            raise ZapiError(0)
+        return {'messageId':'synthetic-first-part'}
+    monkeypatch.setattr('app.zapi_client.ZapiClient.send_text',send)
+    assert runtime.outbox.dispatch(queued)=='part_accepted'
+    assert runtime.outbox.dispatch(queued)=='unknown'
+    assert runtime.outbox.dispatch(queued)=='ignored'
+    assert calls==['Parte um. ','Parte dois. ']
+    with runtime.db() as db:
+        assert [p.status for p in db.query(OutboxPart).filter_by(outbox_id=queued).order_by(OutboxPart.ordinal)]==['accepted','unknown','pending']
 
 
 def test_core_memory_requires_approval_and_context_expires(runtime,monkeypatch):

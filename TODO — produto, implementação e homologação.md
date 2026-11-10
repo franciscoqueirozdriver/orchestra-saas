@@ -1,5 +1,12 @@
 # TODO — produto, implementação e homologação
 
+> **Aviso de atualidade:** checklist legado duplicado em `TODO.md`.
+> Foi escrito antes das conexões WAME e da intervenção humana por grupo; suas caixas
+> não são um retrato confirmado do commit atual. Para estado e riscos atuais, consulte
+> [`docs/ai/CURRENT_STATE.md`](docs/ai/CURRENT_STATE.md) e
+> [`docs/ai/KNOWN_RISKS.md`](docs/ai/KNOWN_RISKS.md). Preserve este registro até
+> reconciliar as pendências de produto com a responsável.
+
 ## Implementado no código desta versão
 
 - [x] Base SaaS multi-tenant: empresa/tenant, primeiro administrador da plataforma, administrador da empresa, login seguro e seleção explícita de tenant pelo backend.

@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta, timezone
 import logging
 import secrets
+import time
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from app.config import settings
@@ -112,6 +113,7 @@ def dispatch(outbox_id):
             row.status = 'dispatching'
             row.attempts += 1
             db.commit()  # Durable claim before external effect; session advisory lock remains held.
+            dispatch_started = time.monotonic()
             try:
                 transport=for_instance(instance)
                 if part and part.ordinal==0 and row.delivery_config.get('presence'):
@@ -126,12 +128,20 @@ def dispatch(outbox_id):
                     instance.sending_enabled = False
                 if part:part.status=row.status
                 db.commit()
+                logger.warning('outbox_part_result tenant=%s outbox=%s provider=%s part=%s state=%s elapsed_ms=%s',
+                               row.tenant_id, row.id, instance.provider,
+                               part.ordinal + 1 if part else 1, row.status,
+                               int((time.monotonic() - dispatch_started) * 1000))
                 return row.status
             remote_id = receipt.message_id
             if not remote_id:
                 row.status, row.last_error = 'unknown', 'provider_returned_no_message_id'
                 if part:part.status='unknown'
                 db.commit()
+                logger.warning('outbox_part_result tenant=%s outbox=%s provider=%s part=%s state=unknown reason=no_receipt elapsed_ms=%s',
+                               row.tenant_id, row.id, instance.provider,
+                               part.ordinal + 1 if part else 1,
+                               int((time.monotonic() - dispatch_started) * 1000))
                 return 'unknown'
             if part:
                 part.external_message_id,part.status=remote_id,'accepted'
@@ -146,6 +156,18 @@ def dispatch(outbox_id):
                 aggregate(db,row)
                 if row.status=='pending':row.next_attempt_at=datetime.now(timezone.utc)+timedelta(seconds=int(row.delivery_config.get('delay',1)))
             db.commit()
+            if part:
+                created_at = row.created_at
+                if created_at and created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=timezone.utc)
+                total_ms = int(max(0, (datetime.now(timezone.utc) - created_at).total_seconds() * 1000)) if created_at else 0
+                logger.info('outbox_part_result tenant=%s outbox=%s provider=%s part=%s/%s state=accepted delay_seconds=%s elapsed_ms=%s',
+                            row.tenant_id, row.id, instance.provider, part.ordinal + 1,
+                            len(parts), int(row.delivery_config.get('delay', 1)),
+                            int((time.monotonic() - dispatch_started) * 1000))
+                logger.info('outbox_delivery_progress tenant=%s outbox=%s provider=%s accepted_parts=%s total_parts=%s total_elapsed_ms=%s',
+                            row.tenant_id, row.id, instance.provider, part.ordinal + 1,
+                            len(parts), total_ms)
             if parts and row.status=='pending':
                 try:
                     from app.tasks import dispatch_outbox

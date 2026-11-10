@@ -1,7 +1,10 @@
 """Caller must own the tenant guard; all invalidation is conversation-scoped."""
+import logging
 from app.models import Conversation, ConversationAction, OutboxMessage, OutboxPart, Agent, ZapiInstance
 from datetime import datetime,timezone,timedelta
 from app.schemas import ConversationProfile
+
+logger=logging.getLogger(__name__)
 
 
 def profile_for(agent):
@@ -13,7 +16,10 @@ def invalidate(db, conversation, reason, *, include_manual=False):
     if not include_manual:query=query.filter(OutboxMessage.response_revision.isnot(None))
     for parent in query.filter(OutboxMessage.status.in_(['pending','retry_wait'])).all():
         parent.status,parent.last_error='cancelled',reason
-        db.query(OutboxPart).filter_by(tenant_id=conversation.tenant_id,outbox_id=parent.id,status='pending').update({'status':'cancelled'},synchronize_session=False)
+        cancelled=db.query(OutboxPart).filter_by(tenant_id=conversation.tenant_id,outbox_id=parent.id,status='pending').update({'status':'cancelled'},synchronize_session=False)
+        if cancelled:
+            logger.info('outbox_parts_cancelled tenant=%s conversation=%s reason=%s count=%s',
+                        conversation.tenant_id,conversation.id,reason,cancelled)
     conversation.revision+=1
     conversation.response_attempts=0
 

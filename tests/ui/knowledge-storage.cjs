@@ -34,14 +34,13 @@ const server=http.createServer((req,res)=>{const f=files[req.url];if(!f){res.wri
   await page.getByRole('button',{name:'Salvar documento',exact:true}).click();
   await page.getByText('Aguardando indexação',{exact:true}).waitFor();
   assert.equal(calls.filter(c=>c[1].endsWith('/index')).length,0);
-  page.on('dialog',dialog=>dialog.accept());
-  await page.getByRole('button',{name:'Indexar para busca'}).click();await page.getByText('Configure a busca na base de conhecimento antes de indexar',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Indexar para busca'}).click();await page.locator('#confirm-dialog').waitFor({state:'visible'});await page.locator('#confirm-ok').click();await page.getByText('Configure a busca na base de conhecimento antes de indexar',{exact:true}).waitFor();
   await page.getByRole('button',{name:'Configurar busca',exact:true}).click();
   await page.locator('#search-connection').selectOption('google-a');
   assert.equal(await page.locator('#search-model').inputValue(),'gemini-embedding-001');
   assert.equal(await page.locator('#search-key').isVisible(),false);
   await page.getByRole('button',{name:'Salvar configuração',exact:true}).click();await page.waitForFunction(()=>!document.querySelector('#modal').open);
-  await page.getByRole('button',{name:'Indexar para busca'}).click();await page.getByText('Disponível para busca',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Indexar para busca'}).click();await page.locator('#confirm-dialog').waitFor({state:'visible'});await page.locator('#confirm-ok').click();await page.getByText('Disponível para busca',{exact:true}).waitFor();
   assert.equal(await page.getByRole('button',{name:'Indexar para busca'}).count(),0);
   assert.deepEqual(payloads,[{model:'gemini-embedding-001',connection_id:'google-a'}]);assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
   console.log('UI conhecimento aprovada: salvar sem IA, pendência, configuração própria e indexação explícita.');

@@ -56,6 +56,93 @@ def split_reply(text, maximum=1500):
     return result
 
 
+def split_reply_conversational(text, *, target_chars=180, max_chars=300, max_parts=3):
+    """Split at readable boundaries without changing text; refuse when safe limits cannot fit it."""
+    if not text.strip():
+        return []
+    if not 100 <= target_chars <= 180:
+        raise ValueError('Tamanho-alvo conversacional inválido')
+    if not target_chars <= max_chars <= 300:
+        raise ValueError('Tamanho máximo conversacional inválido')
+    if not 1 <= max_parts <= 3:
+        raise ValueError('Quantidade máxima de partes inválida')
+    if len(text) <= target_chars or (max_parts == 1 and len(text) <= max_chars):
+        return [text]
+
+    protected = [m.span() for m in re.finditer(
+        r'https?://[^\s<>]+|www\.[^\s<>]+|R\$\s*\d[\d.,]*|'
+        r'(?<!\w)\+?\d{1,3}\s+\(?\d{2,3}\)?\s*\d{4,5}[-\s]?\d{4}(?!\w)|'
+        r'(?<!\w)\d+(?:[.,/]\d+)*(?:\s?(?:m²|m2|cm|mm|km|kg|kw|w|btu|%|h|horas|dias)\b)?',
+        text,
+        flags=re.IGNORECASE,
+    )]
+
+    def safe_boundary(position):
+        return not any(start < position < end for start, end in protected)
+
+    # Natural boundaries include sentence endings and line breaks. Keep all
+    # separators in the preceding slice so concatenation reproduces the input.
+    boundaries = []
+    for match in re.finditer(r'[.!?…]+[”’"\')\]]*(?=\s)|\n+', text):
+        end = match.end()
+        while end < len(text) and text[end].isspace():
+            end += 1
+        if end < len(text) and end > 0 and safe_boundary(end):
+            boundaries.append(end)
+
+    units = []
+    start = 0
+    for end in boundaries:
+        if end > start:
+            units.append(text[start:end])
+            start = end
+    if start < len(text):
+        units.append(text[start:])
+
+    # A single unusually long sentence may be wrapped at whitespace, preferring
+    # clause punctuation. Protected URLs, money values and phone numbers stay whole.
+    expanded = []
+    base_offset = 0
+    for unit in units:
+        if len(unit) <= max_chars:
+            expanded.append(unit)
+            base_offset += len(unit)
+            continue
+        remaining = unit
+        while len(remaining) > max_chars:
+            limit = max_chars
+            candidates = [m.end() for m in re.finditer(r'\s+', remaining[:limit])
+                          if m.end() > 0 and safe_boundary(base_offset + m.end())]
+            if not candidates:
+                raise ValueError('Uma unidade indivisível excede o limite de uma parte')
+            clause_candidates = [end for end in candidates
+                                 if remaining[:end].rstrip().endswith((',', ';', ':'))]
+            cut = (clause_candidates or candidates)[-1]
+            expanded.append(remaining[:cut])
+            remaining = remaining[cut:]
+            base_offset += cut
+        expanded.append(remaining)
+        base_offset += len(remaining)
+
+    parts = []
+    current = ''
+    for unit in expanded:
+        if current and (len(current) >= target_chars or len(current) + len(unit) > max_chars):
+            parts.append(current)
+            current = ''
+        if len(unit) > max_chars:
+            raise ValueError('Uma unidade excede o limite de uma parte')
+        current += unit
+    if current:
+        parts.append(current)
+
+    if len(parts) > max_parts:
+        raise ValueError('A resposta excede o máximo seguro de partes; requer revisão humana')
+    if ''.join(parts) != text or any(not part or len(part) > max_chars for part in parts):
+        raise ValueError('Não foi possível fragmentar a resposta sem alterar o conteúdo')
+    return parts
+
+
 def correction(text):
     value=normalize(text)
     return value.startswith(('nao foi isso', 'nao era isso', 'voce nao entendeu', 'nao entendeu', 'entendeu errado'))
@@ -85,7 +172,13 @@ def transition(previous, text):
 
 def style_instructions(profile, state):
     tone={'neutral':'neutro e acolhedor','formal':'formal e claro','friendly':'próximo e respeitoso'}[profile.tone]
+    delivery=(' Para WhatsApp: entregue uma resposta objetiva que caiba em até '
+              f'{profile.humanized_max_parts} mensagens, cada uma com no máximo '
+              f'{profile.humanized_max_chars} caracteres. Preserve os fatos e dados necessários; '
+              'priorize o que responde ao pedido e o próximo passo, sem repetir contexto nem omitir '
+              'informação essencial apenas para caber. Não crie uma mensagem por frase.') if profile.humanized_delivery else ''
     return (f'Perfil de estilo: tom {tone}; concisão {profile.conciseness}; emojis {profile.emojis}. '
+            + delivery + ' '
             'Estilo não é fonte de fatos, preços ou autorização. Não imite uma pessoa real. '
             'Se perguntado, informe que é assistente automatizado. Responda ao pedido junto da saudação. '
             'Não acrescente perguntas artificiais a toda resposta. Preserve números, itens e nomes relevantes. '
