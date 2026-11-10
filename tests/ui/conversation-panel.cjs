@@ -19,7 +19,7 @@ const server = http.createServer((req,res)=>{
   const page=await browser.newPage();const errors=[];const mutations=[];
   page.on('pageerror',e=>errors.push(e.message));
   let revision=1,status='open',rejectSend=true;
-  let profile={enabled:false,tone:'neutral',conciseness:'balanced',emojis:'none',context_minutes:60,max_wait_seconds:20,part_chars:1500,part_delay_seconds:1,presence:false,humanized_delivery:false,humanized_target_chars:180,humanized_max_chars:300,humanized_max_parts:3,humanized_delay_seconds:2,vocabulary:[],examples:[]};
+  let profile={enabled:false,visit_booking_enabled:false,tone:'neutral',conciseness:'balanced',emojis:'none',context_minutes:60,max_wait_seconds:20,part_chars:1500,part_delay_seconds:1,presence:false,humanized_delivery:false,humanized_target_chars:180,humanized_max_chars:300,humanized_max_parts:3,humanized_delay_seconds:2,vocabulary:[],examples:[]};
   await page.route('**/*',async route=>{
     const request=route.request(),url=new URL(request.url());
     if(url.origin!==origin)return route.abort();
@@ -50,14 +50,14 @@ const server = http.createServer((req,res)=>{
   await page.locator('[data-route="agents"]').click();
   await page.getByRole('button',{name:'Tom e conversa'}).click();
   await page.locator('#conversation-profile-form [name="enabled"]').check();
-  const humanizedToggle=page.getByLabel('Enviar respostas longas em blocos conversacionais');
-  await humanizedToggle.focus();await page.keyboard.press('Space');
-  assert.equal(await humanizedToggle.isChecked(),true);
-  assert.equal(await page.locator('#humanized-delivery').getAttribute('aria-describedby'),'humanized-delivery-help');
+  await page.locator('#conversation-profile-form [name="visit_booking_enabled"]').check();
+  assert.match(await page.locator('#conversation-profile-form').innerText(),/aplicado globalmente a todos os agentes/i);
+  assert.equal(await page.locator('#conversation-profile-form [name="humanized_delivery"]').count(),0);
+  assert.equal(await page.locator('#conversation-profile-form [name="humanized_max_parts"]').count(),0);
   await page.locator('#conversation-profile-form [name="tone"]').selectOption('formal');
   await page.getByRole('button',{name:'Salvar perfil'}).click();
   await page.waitForFunction(()=>!document.querySelector('#modal').open);
-  assert.equal(profile.enabled,true);assert.equal(profile.tone,'formal');assert.equal(profile.humanized_delivery,true);assert.equal(profile.humanized_max_parts,3);
+  assert.equal(profile.enabled,true);assert.equal(profile.visit_booking_enabled,true);assert.equal(profile.tone,'formal');assert.equal(profile.humanized_delivery,false);assert.equal(profile.humanized_max_parts,3);
   await page.locator('[data-route="conversations"]').click();await page.locator('[data-conversation]').click();
   await page.getByRole('button',{name:'Assumir',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('#message-title').textContent.includes('human'));

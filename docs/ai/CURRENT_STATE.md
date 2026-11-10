@@ -33,7 +33,8 @@ homologação de fornecedor.
 | Pipeline privado de conversas | Implementado como ferramentas locais | `scripts/private_knowledge/`, `docs/conhecimento/ingestao-local-whatsapp.md` | Não é parte do serviço da aplicação; material bruto não foi examinado nesta auditoria |
 | Grupo de atendimento | Implementado no código; homologação pendente | `interventions.py`, `routes_zapi.py`, migration `0009`, `docs/intervencao-humana-grupo.md` | Envio de teste é externo e real; estado `validated` é confirmação organizacional, não confirmação de leitura fornecida pela API |
 | Conversas importadas como base de busca | Não automático; fluxos separados | histórico em `messages`; conhecimento indexado em `knowledge_documents/chunks` | Não assumir que histórico foi indexado ou que conversa histórica virou regra |
-| Envio humanizado em blocos | Implementado localmente e testado em containers, opt-in, sem homologação externa | branch `feat/humanized-whatsapp-delivery`: `split_reply_conversational`, `humanized_delivery`, partes do outbox existente; em 10/11/2026, 149 testes unitários e 57 de integração passaram, além de UI sintética anterior | Perfis existentes não ativam a opção; respostas acima do limite seguro escalam para intervenção; composing segue desativado; evento duravelmente aceito e associado sem ambiguidade preempta partes ainda pendentes e bloqueia geração até processamento assíncrono; chamada externa já iniciada e identidade não resolvida continuam limites; não foi feito deploy |
+| Envio humanizado em blocos | Implementado localmente como política global do canal; sem homologação externa | branch `feat/enrico-context-booking`: `split_reply_conversational` e partes do outbox existente; resposta curta fica inteira, demais até 3 blocos de 300 caracteres, intervalo fixo de 2 s; campos antigos de perfil são mantidos apenas por compatibilidade e não controlam a entrega | Respostas acima do limite seguro escalam para intervenção; composing segue desativado; chamada externa já iniciada não é cancelável; não foi feito deploy |
+| Qualificação e encaminhamento para visita técnica | Implementado localmente, opt-in por capacidade do perfil do agente | `ConversationProfile.visit_booking_enabled`, falso por padrão; sem migration, em `feat/enrico-context-booking` | Habilitar apenas agentes com fluxo de visitas real; nenhum agendamento automático sem confirmação operacional; homologação humana ainda pendente |
 | Integração com Instagram, billing SaaS, ferramentas MCP/CRM/agenda, multiagente | Planejado ou não verificado | `TODO.md`, `docs/intencoes/`, documentação de contratação | Documentação/proposta não demonstra implementação |
 
 ## Banco e migrations
@@ -71,16 +72,27 @@ como fotografia atual.
 
 ## Trabalho em andamento — branch local
 
-Em `feat/humanized-whatsapp-delivery`, o código de segmentação e configuração está
-alterado localmente sobre `6cd1abe`. A implementação reutiliza `outbox_parts` e não
+Em `feat/enrico-context-booking`, a segmentação global e as correções de continuidade
+estão alteradas localmente sobre `46bd99c`. A implementação reutiliza `outbox_parts` e não
 adiciona migration. Ver `docs/handoff/2026-11-10-envio-humanizado.md` para os arquivos,
-verificações efetuadas e limitações do ambiente de testes. Suítes unitária (149) e de
-integração (57) passaram em containers locais; o teste de UI sintético havia passado na
-verificação anterior. Homologação externa não foi executada. O prompt de agentes com
-envio humanizado orienta resposta concisa e completa na primeira geração; excesso ainda
-escala sem uma segunda geração. A entrada e o dispatcher compartilham lock de tenant:
+verificações iniciais; o handoff `docs/handoff/2026-11-10-contexto-conversacional-global.md`
+registra a atualização global da entrega. Suítes unitária (154) e de integração (58)
+passaram em containers locais; dois testes de integração foram pulados por ausência da
+baseline histórica. A UI sintética foi atualizada para confirmar que não há toggle por
+agente. Homologação externa não foi executada. O núcleo global instrui resposta concisa
+e completa na primeira geração; excesso ainda escala sem uma segunda geração. A entrada e o dispatcher compartilham lock de tenant:
 evento, incremento de revisão e cancelamento de partes pendentes são transacionais; o
 worker reconhece o marcador interno para não repetir a invalidação. A chamada externa
 que já iniciou não é cancelável e uma identidade de contato ambígua não é atribuída por
 inferência. `respond_to_conversation` aguarda se há evento preemptivo ainda não
 processado para a conversa. Não houve commit, publicação ou alteração na VPS.
+
+## Continuidade conversacional e visitas — alteração local em `feat/enrico-context-booking`
+
+**IMPLEMENTADO no código local:** o núcleo comum mantém um resumo estruturado e com prazo dentro de `Conversation.context_state`, adicional ao histórico de mensagens. Registra fatos explícitos com referência da mensagem e tempo; no primeiro uso também reconstrói o resumo a partir de até 200 mensagens recentes de conversas preexistentes, exceto quando o contexto expirou. Usa telefone numérico direto do provedor como metadado não confirmado; evita enviar dígitos do telefone ao modelo; confirma com o cliente o canal de WhatsApp ou alternativo; e identifica a pessoa que receberá a equipe sem inferir nome de perfil ou papel de decisor. As regras de linguagem, continuidade e envio em blocos são globais. O perfil de agente continua sendo a fonte de especialidade, produto, tom e objetivo; fluxos de negócio como qualificação para visita dependem da capacidade individual `visit_booking_enabled`.
+
+**IMPLEMENTADO:** quando os dados necessários da visita estão completos, o backend solicita validação pelo fluxo existente de intervenção humana. Sem agenda integrada ou confirmação operacional, o status permanece `awaiting_confirmation` e o texto não declara visita marcada. O resumo estruturado é incluído no contexto da equipe, com telefone somente depois de autorizado. Nenhuma tabela ou migration nova.
+
+**TESTADO em 10/11/2026:** 154 testes unitários passaram; 58 testes de integração passaram no PostgreSQL descartável e 2 testes de consolidação de migrations foram pulados porque a baseline histórica não estava disponível. Os testes sintéticos cobrem conversa preexistente, igreja, escolha de data/horário, retorno por telefone autorizado, tentativa do modelo de confirmar sem agenda, recebedor terceiro, grupo de atendimento não configurado, datas alternativas e isolamento do fluxo de visitas por capacidade de agente. Sem chamadas reais a fornecedores. Consulte `docs/handoff/2026-11-10-contexto-conversacional-global.md`.
+
+**NÃO HOMOLOGADO:** extração determinística pode não reconhecer mensagens ambíguas; não há integração de agenda e não foram homologados fornecedores, grupo real nem a experiência com clientes. O estado da VPS e publicação não foram consultados nem alterados.

@@ -457,17 +457,14 @@ def test_core_groups_fragmented_input_and_persists_context(runtime,monkeypatch):
     assert runtime.tasks.respond_to_conversation.run('tenant-a','conversation-a',3)=='already_enqueued'
 
 
-def test_core_humanized_profile_persists_bounded_parts_and_delay(runtime,monkeypatch):
+def test_core_global_humanized_delivery_applies_without_agent_profile_opt_in(runtime,monkeypatch):
     from app.models import Agent,Conversation,OutboxMessage,OutboxPart
-    from app.schemas import ConversationProfile
     core(runtime,monkeypatch)
     scheduled=[]
     monkeypatch.setattr(runtime.tasks.dispatch_outbox,'apply_async',lambda *args,**kwargs:scheduled.append((args,kwargs)))
     monkeypatch.setattr('app.zapi_client.ZapiClient.send_text',lambda *args:{'messageId':'synthetic-humanized-part'})
     with runtime.db() as db:
-        db.get(Agent,'agent-a').conversation_profile=ConversationProfile(
-            enabled=True,humanized_delivery=True,humanized_delay_seconds=3,
-        ).model_dump()
+        db.get(Agent,'agent-a').conversation_profile={}
         db.commit()
     text=('A Climatiza Brasil atende empresas com soluções para diferentes ambientes e ajuda a identificar '
           'uma alternativa adequada para cada espaço. Para entender seu caso, qual é a metragem aproximada '
@@ -484,20 +481,17 @@ def test_core_humanized_profile_persists_bounded_parts_and_delay(runtime,monkeyp
         assert 1<len(parts)<=3
         assert ''.join(part.content for part in parts)==text
         assert all(len(part.content)<=300 for part in parts)
-        assert parent.delivery_config['delay']==3
+        assert parent.delivery_config=={'delay':2,'presence':False}
         parent_id=parent.id
     assert runtime.outbox.dispatch(parent_id)=='part_accepted'
-    assert scheduled[-1][1]['countdown']==3
+    assert scheduled[-1][1]['countdown']==2
 
 
 def test_core_humanized_overflow_pauses_and_escalates_without_partial_reply(runtime,monkeypatch):
     from app.models import Agent,Conversation,InterventionRequest,OutboxMessage,OutboxPart
-    from app.schemas import ConversationProfile
     core(runtime,monkeypatch)
     with runtime.db() as db:
-        db.get(Agent,'agent-a').conversation_profile=ConversationProfile(
-            enabled=True,humanized_delivery=True,
-        ).model_dump()
+        db.get(Agent,'agent-a').conversation_profile={}
         db.commit()
     answer=' '.join(
         f'Para a etapa número {i}, a equipe avalia as condições do ambiente e confirma os dados relevantes.'
@@ -773,6 +767,103 @@ def test_core_memory_requires_approval_and_context_expires(runtime,monkeypatch):
         assert 'Expired synthetic question' not in instructions
         assert db.query(ConversationTurn).one().state['previous_request']==''
         assert history[-1]['content']=='E os de amanhã?'
+
+
+def test_core_visit_continuity_asks_receiver_and_never_confirms_without_operation(runtime,monkeypatch):
+    from app.models import Agent,LLMConfig,Conversation,Message,OutboxMessage,InterventionRequest
+    from app.schemas import ConversationProfile
+    from app.conversation.behavior import opportunity_ready_for_team
+    core(runtime,monkeypatch)
+    with runtime.db() as db:
+        db.get(Agent,'agent-a').conversation_profile=ConversationProfile(visit_booking_enabled=True).model_dump()
+        db.add(Message(tenant_id='tenant-a',conversation_id='conversation-a',direction='outgoing',author_kind='assistant',kind='text',content='Qual é o endereço e seu melhor telefone para retorno?'))
+        db.commit()
+    incoming=[('visit-1','Quero orçamento de climatização para uma igreja. É em Betim.'),
+              ('visit-2','Av. Amazonas, 1270. Centro. Amanhã às 10:00. 31984265506')]
+    for key,body in incoming:
+        runtime.tasks.process_webhook_event.run(event(runtime,key,payload={'chatLid':'synthetic-contact','phone':'5511999999999','normalizedKind':'text','normalizedText':body}))
+    with runtime.db() as db:
+        c=db.get(Conversation,'conversation-a');revision=c.revision;sales=c.context_state['sales_context']
+        assert sales['facts']['environment']['value']=='igreja'
+        assert sales['facts']['city']['value']=='Betim'
+        assert sales['facts']['address']['value']=='Av. Amazonas, 1270. Centro'
+        assert sales['facts']['alternate_phone']['value']=='31984265506'
+        assert sales['channel_phone_status']=='alternate_authorized'
+        assert not opportunity_ready_for_team(sales)
+        instructions,history=runtime.tasks._build_context(db,db.get(Agent,'agent-a'),c,[db.get(LLMConfig,'model-a')],revision)
+        assert 'igreja' in instructions and 'Betim' in instructions and '31984265506' not in instructions
+        assert '31984265506' not in ''.join(m['content'] for m in history)
+    monkeypatch.setattr(runtime.tasks,'_graph_response',lambda *a:'A visita está confirmada para amanhã às 10h. A equipe estará lá!')
+    assert runtime.tasks.respond_to_conversation.run('tenant-a','conversation-a',revision)=='reply_queued'
+    with runtime.db() as db:
+        c=db.get(Conversation,'conversation-a');sales=c.context_state['sales_context']
+        reply=db.query(OutboxMessage).filter_by(tenant_id='tenant-a',conversation_id='conversation-a',status='pending').one()
+        assert sales['receiver_question_asked'] is True
+        assert 'não está confirmada' in reply.content
+        assert 'Será você mesmo quem vai receber' in reply.content
+        assert 'visita está confirmada' not in reply.content
+        first_reply_id=reply.id
+    monkeypatch.setattr('app.zapi_client.ZapiClient.send_text',lambda *args:{'messageId':'synthetic-receiver-question'})
+    assert runtime.outbox.dispatch(first_reply_id)=='accepted'
+    runtime.tasks.process_webhook_event.run(event(runtime,'visit-receiver-no',payload={'chatLid':'synthetic-contact','phone':'5511999999999','normalizedKind':'text','normalizedText':'Não, minha irmã receberá.'}))
+    with runtime.db() as db:c=db.get(Conversation,'conversation-a');revision=c.revision
+    assert runtime.tasks.respond_to_conversation.run('tenant-a','conversation-a',revision)=='reply_queued'
+    with runtime.db() as db:
+        c=db.get(Conversation,'conversation-a');sales=c.context_state['sales_context']
+        assert sales['receiver_status']=='other_person_needed' and sales['receiver_name_question_asked'] is True
+        reply=db.query(OutboxMessage).filter_by(tenant_id='tenant-a',conversation_id='conversation-a',status='pending').one()
+        assert 'primeiro nome da pessoa' in reply.content
+        second_reply_id=reply.id
+    monkeypatch.setattr('app.zapi_client.ZapiClient.send_text',lambda *args:{'messageId':'synthetic-name-question'})
+    assert runtime.outbox.dispatch(second_reply_id)=='accepted'
+    runtime.tasks.process_webhook_event.run(event(runtime,'visit-receiver-name',payload={'chatLid':'synthetic-contact','phone':'5511999999999','normalizedKind':'text','normalizedText':'Ana Souza'}))
+    with runtime.db() as db:c=db.get(Conversation,'conversation-a');revision=c.revision
+    assert runtime.tasks.respond_to_conversation.run('tenant-a','conversation-a',revision)=='visit_confirmation_pending_human'
+    with runtime.db() as db:
+        c=db.get(Conversation,'conversation-a');sales=c.context_state['sales_context']
+        assert sales['receiver_status']=='other_person_confirmed'
+        assert sales['facts']['receiver_name']['value']=='Ana Souza'
+        assert sales['appointment_status']=='awaiting_confirmation'
+        ticket=db.query(InterventionRequest).filter_by(tenant_id='tenant-a',conversation_id='conversation-a').one()
+        assert ticket.status=='setup_required'
+        notice=db.query(OutboxMessage).filter_by(tenant_id='tenant-a',conversation_id='conversation-a',author_kind='system').one()
+        assert 'ainda não está confirmada' in notice.content
+        assert 'não consegui enviar o alerta automaticamente' in notice.content
+
+
+def test_core_build_context_backfills_structured_facts_for_existing_conversation(runtime,monkeypatch):
+    from app.models import Agent,Conversation,LLMConfig,Message
+    from app.schemas import ConversationProfile
+    core(runtime,monkeypatch)
+    base=datetime.now(timezone.utc)-timedelta(minutes=2)
+    with runtime.db() as db:
+        c=db.get(Conversation,'conversation-a')
+        db.get(Agent,'agent-a').conversation_profile=ConversationProfile(visit_booking_enabled=True).model_dump()
+        c.context_state={}
+        db.add_all([
+            Message(tenant_id='tenant-a',conversation_id=c.id,direction='incoming',author_kind='user',kind='text',content='Quero orçamento de climatização para uma igreja.',created_at=base),
+            Message(tenant_id='tenant-a',conversation_id=c.id,direction='outgoing',author_kind='assistant',kind='text',content='Em qual cidade fica?',created_at=base+timedelta(seconds=1)),
+            Message(tenant_id='tenant-a',conversation_id=c.id,direction='incoming',author_kind='user',kind='text',content='É em Betim.',created_at=base+timedelta(seconds=2)),
+        ])
+        db.commit()
+        instructions,_=runtime.tasks._build_context(db,db.get(Agent,'agent-a'),c,[db.get(LLMConfig,'model-a')])
+        assert 'igreja' in instructions and 'Betim' in instructions
+
+
+def test_visit_qualification_is_not_injected_for_agents_without_that_capability(runtime,monkeypatch):
+    from app.models import Agent,Conversation,LLMConfig
+    core(runtime,monkeypatch)
+    with runtime.db() as db:
+        db.get(Agent,'agent-a').conversation_profile={}
+        db.commit()
+    runtime.tasks.process_webhook_event.run(event(runtime,'no-visit-capability',payload={
+        'phone':'synthetic-contact','normalizedKind':'text','normalizedText':'Quero agendar uma visita técnica quinta às 10h.'
+    }))
+    with runtime.db() as db:
+        c=db.get(Conversation,'conversation-a')
+        assert 'sales_context' not in (c.context_state or {})
+        instructions,_=runtime.tasks._build_context(db,db.get(Agent,'agent-a'),c,[db.get(LLMConfig,'model-a')])
+        assert 'Resumo estruturado da oportunidade' not in instructions
 
 
 def test_core_continuous_input_maximum_allows_latest_revision(runtime,monkeypatch):

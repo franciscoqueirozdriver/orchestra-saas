@@ -36,6 +36,19 @@ def from_me(payload: dict[str, Any]) -> bool:
     return payload.get("fromMe") is True or str(payload.get("fromMe", "")).strip().lower() in {"true", "1"}
 
 
+def direct_contact_phone(payload: dict[str, Any]) -> str | None:
+    """Read only a numeric direct-chat phone; never trust group/LID aliases."""
+    if payload.get("isGroup") is True or str(payload.get("isGroup", "")).strip().lower() in {"true", "1", "yes"}:
+        return None
+    raw = str(payload.get("phone") or "").strip()
+    if not raw or "@" in raw:
+        return None
+    digits = re.sub(r"\D", "", raw)
+    if len(digits) not in {10, 11, 12, 13} or (len(digits) > 11 and not digits.startswith("55")):
+        return None
+    return digits
+
+
 def contact_key(payload: dict[str, Any]) -> str:
     # Preserva LID/identificadores originais quando presentes; sempre vinculado à instância.
     return str(payload.get("chatLid") or payload.get("senderLid") or payload.get("phone") or payload.get("participantLid") or payload.get("participantPhone") or "")[:180]

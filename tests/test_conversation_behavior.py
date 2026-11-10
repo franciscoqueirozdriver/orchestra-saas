@@ -36,23 +36,80 @@ def test_profile_changes_style_not_facts_or_permissions():
     assert ConversationProfile().enabled is False
 
 
-def test_humanized_profile_defaults_are_opt_in_and_bounded():
+def test_context_carries_sales_facts_and_uses_direct_whatsapp_confirmation():
+    from datetime import datetime,timezone
+    from app.conversation.behavior import merge_sales_context,next_opportunity_question,opportunity_ready_for_team
+    now=datetime.now(timezone.utc)
+    state=merge_sales_context({},'Orçamento de climatização para uma igreja pequena em Betim.',message_id='m1',captured_at=now,provider_phone='5531999999999')
+    state=merge_sales_context(state,'Av. Amazonas, 1270. Centro',message_id='m2',captured_at=now)
+    state=merge_sales_context(state,'Amanhã às 10:00',message_id='m3',captured_at=now)
+    assert state['facts']['environment']['value']=='igreja'
+    assert state['facts']['city']['value']=='Betim'
+    assert state['channel_phone_status']=='unconfirmed'
+    assert not opportunity_ready_for_team(state)
+    state['receiver_status']='customer_confirmed'
+    assert next_opportunity_question(state)=='Podemos usar este mesmo WhatsApp para nossa equipe entrar em contato?'
+    state=merge_sales_context(state,'Sim, pode usar.',message_id='m4',captured_at=now,last_assistant_text='Podemos usar este mesmo WhatsApp para nossa equipe entrar em contato?')
+    assert state['channel_phone_status']=='confirmed'
+
+
+def test_ambiguous_date_options_are_not_silently_collapsed():
+    from datetime import datetime,timezone
+    from app.conversation.behavior import merge_sales_context,next_opportunity_question
+    now=datetime.now(timezone.utc)
+    state=merge_sales_context({},'Pode ser amanhã ou quinta.',message_id='m1',captured_at=now)
+    state['facts'].update({'city':{'value':'Betim'},'address':{'value':'Rua Sintética, 1'}})
+    assert state['facts']['preferred_date']['value'].lower()=='amanhã ou quinta'
+    assert next_opportunity_question(state)=='Entre amanhã ou quinta, qual opção você prefere?'
+    state=merge_sales_context({},'Pode ser na próxima quinta-feira, pela manhã.',message_id='m2',captured_at=now)
+    assert state['facts']['preferred_date']['value'].lower()=='na próxima quinta-feira'
+
+
+def test_other_visit_receiver_requires_name_without_inventing_interlocutor():
+    from datetime import datetime,timezone
+    from app.conversation.behavior import merge_sales_context,next_opportunity_question,sales_context_instructions
+    now=datetime.now(timezone.utc)
+    state={'facts':{'city':{'value':'Betim'},'address':{'value':'Rua Sintética, 1'},'preferred_date':{'value':'amanhã'},'preferred_time':{'value':'10:00'}},'channel_phone_status':'confirmed','receiver_status':'unknown','appointment_status':'visit_requested'}
+    state=merge_sales_context(state,'Não, minha irmã receberá.',message_id='m1',captured_at=now,last_assistant_text='Será você mesmo quem vai receber nossa equipe no local?')
+    assert state['receiver_status']=='other_person_needed'
+    assert next_opportunity_question(state).startswith('Qual é o primeiro nome')
+    state['receiver_name_question_asked']=True
+    state=merge_sales_context(state,'Ana Souza',message_id='m2',captured_at=now,last_assistant_text='Qual é o primeiro nome da pessoa que estará no local para receber a equipe?')
+    assert state['receiver_status']=='other_person_confirmed'
+    assert state['facts']['receiver_name']['value']=='Ana Souza'
+    assert 'Ana Souza' in sales_context_instructions(state)
+    assert 'Francisco' not in sales_context_instructions(state)
+    state=merge_sales_context({'receiver_status':'other_person_needed'},'Minha irmã Ana Souza',message_id='m3',captured_at=now,
+                              last_assistant_text='Qual é o primeiro nome da pessoa que estará no local para receber a equipe?')
+    assert state['facts']['receiver_name']['value']=='Ana Souza'
+    state=merge_sales_context({},'Eu mesmo, Francisco',message_id='m4',captured_at=now)
+    assert state['facts']['interlocutor_name']['value']=='Francisco'
+
+
+def test_appointment_preference_is_never_a_confirmed_booking_and_phone_is_redacted():
+    from app.conversation.behavior import needs_unverified_visit_handoff,redact_contact_numbers
+    state={'facts':{'preferred_date':{'value':'amanhã'},'preferred_time':{'value':'10:00'}}}
+    assert needs_unverified_visit_handoff('A visita está confirmada para amanhã às 10h.',state)
+    assert needs_unverified_visit_handoff('Perfeito, ficou marcada para quinta às 10h.',state)
+    assert needs_unverified_visit_handoff('Combinado, estaremos aí na quinta.',state)
+    assert not needs_unverified_visit_handoff('A visita ainda não está confirmada; falta validar.',state)
+    assert not needs_unverified_visit_handoff('A visita ainda aguarda confirmação da equipe.',state)
+    assert '98426-5506' not in redact_contact_numbers('Telefone 31 98426-5506')
+
+
+def test_legacy_humanized_profile_fields_remain_bounded_for_api_compatibility():
     default=ConversationProfile()
+    assert default.visit_booking_enabled is False
     assert default.humanized_delivery is False
     assert (default.humanized_target_chars,default.humanized_max_chars,default.humanized_max_parts,default.humanized_delay_seconds)==(180,300,3,2)
     with pytest.raises(ValueError):ConversationProfile(humanized_max_parts=4)
     with pytest.raises(ValueError):ConversationProfile(humanized_max_chars=301)
 
 
-def test_humanized_delivery_asks_model_for_concise_complete_whatsapp_answer():
-    legacy=style_instructions(ConversationProfile(enabled=True),{})
-    profile=ConversationProfile(enabled=True,humanized_delivery=True)
-    prompt=style_instructions(profile,{})
-    assert 'caiba em até 3 mensagens' in prompt
-    assert 'no máximo 300 caracteres' in prompt
-    assert 'Preserve os fatos e dados necessários' in prompt
-    assert 'Não crie uma mensagem por frase' in prompt
-    assert 'caiba em até' not in legacy
+def test_per_agent_style_does_not_control_global_message_delivery():
+    disabled=style_instructions(ConversationProfile(enabled=True,humanized_delivery=False),{})
+    enabled=style_instructions(ConversationProfile(enabled=True,humanized_delivery=True),{})
+    assert disabled==enabled
 
 
 def test_correction_budget_and_new_request():

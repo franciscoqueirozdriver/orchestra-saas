@@ -19,6 +19,21 @@ segurança completa nem declaração de vulnerabilidade confirmada.
 | Infra/segredos | `.env`, volumes, backups e imagens guardam segredos/dados; release pode aplicar migrations e reiniciar serviços | Checar `.gitignore`, `.dockerignore`, contextos, recibo/backup, SHA completo e checkout remoto; publicação/deploy requer autorização própria |
 | Mídia | `MEDIA_DIR` persistente e processadores de upload carregam risco de privacidade, tamanho e conteúdo hostil | Conferir limites, tipo real, armazenamento/retention, permissões e tenant; não anexar acervo real a testes |
 | Docs sobre produção | Handoffs são snapshots com datas; código local posterior não prova estado remoto | Consultar VPS/CI apenas com escopo e autorização adequados; rotular sem confirmação como desconhecido |
+| Extração heurística para qualificação de visitas | Regras podem não extrair data, cidade, telefone ou recebedor em formulações ambíguas; a capacidade fica restrita a perfis habilitados e, em conversa preexistente, a reconstrução considera até 200 mensagens recentes | Manter proveniência e timestamps, rejeitar grupo/LID como telefone e testar português coloquial. Falta medir mensagens reais autorizadas em homologação, sem usar acervo privado como fixture Git |
+| Pedido de visita sem agenda integrada | O sistema não consulta disponibilidade nem reserva horário; alerta de intervenção pode não ser enviado se grupo não estiver validado | Permanecer em `awaiting_confirmation`, informar pendência com honestidade e validar o fluxo humano antes de operação; nunca converter preferência em `confirmed` |
+| Interpretação de afirmações de agendamento | A proteção contra confirmações falsas é determinística e cobre construções conhecidas, mas não é uma garantia semântica para toda paráfrase | Manter testes de linguagem real sintética e exigir validação operacional antes de comunicar disponibilidade; qualquer texto do modelo não equivale a reserva |
+| Data relativa em visita | “Próxima quinta” é preservada como frase, sem conversão para data absoluta porque não há fuso de negócio por tenant | Não confirmar compromisso nem calcular disponibilidade até existir timezone/configuração de agenda autorizada |
+| Segmentação global | Toda resposta automática usa até três partes de 300 caracteres e intervalo de 2 s; texto maior ou indivisível segue para intervenção, o que pode aumentar handoffs | Medir cancelamentos, latência e legibilidade em operação controlada; limites são hipóteses de experiência, não limites oficiais do WhatsApp |
+
+## Validação local da continuidade conversacional — 2026-11-10
+
+Na branch `feat/enrico-context-booking`, 154 testes unitários passaram e 58 de
+integração passaram em PostgreSQL descartável; dois testes de consolidação de migrations
+foram pulados por ausência da baseline de origem. A cobertura sintética verifica
+metadados de telefone de Z-API/WAME, resposta do cliente, recebedor terceiro, segmentação
+global mesmo com perfil sem opt-in e ausência de fluxo de visita para agentes sem a
+capacidade configurada. Isso não demonstra a qualidade de extração em todas as formas de
+escrita, nem homologação da agenda, dos grupos ou dos provedores.
 
 ## Validação local da branch de envio humanizado — 2026-11-10
 

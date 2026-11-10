@@ -226,6 +226,8 @@ class ConversationProfile(BaseModel):
     emojis: str = Field(default='none', pattern=r'^(none|sparing)$')
     vocabulary: list[str] = Field(default_factory=list, max_length=20)
     examples: list[str] = Field(default_factory=list, max_length=3)
+    # Business capability is agent-specific; shared language and delivery rules are global.
+    visit_booking_enabled: bool = False
     context_minutes: int = Field(default=60, ge=5, le=1440)
     max_wait_seconds: int = Field(default=20, ge=3, le=60)
     part_chars: int = Field(default=1500, ge=300, le=4000)

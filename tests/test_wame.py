@@ -4,7 +4,7 @@ from pydantic import ValidationError
 from app.schemas import ZapiInstanceCreate
 from app.wame_client import WameClient
 from app.wame_payload import normalize_wame_events
-from app.zapi_payload import classify, contact_key, from_me
+from app.zapi_payload import classify, contact_key, from_me, direct_contact_phone
 
 
 OFFICIAL_TEXT = {
@@ -89,6 +89,7 @@ def test_official_and_qr_text_become_the_same_internal_event():
     assert contact_key(official) == "5511988887777"
     assert official["type"] == qr["type"] == "ReceivedCallback"
     assert official["isGroup"] is False
+    assert direct_contact_phone(official)=="5511988887777"
 
 
 def test_group_from_me_and_delivery_keep_existing_pipeline_fields():
@@ -103,6 +104,7 @@ def test_group_from_me_and_delivery_keep_existing_pipeline_fields():
     assert group["isGroup"] is True
     assert group["phone"] == "16479379001-1580667835@g.us"
     assert group["participantPhone"] == "5511777776666"
+    assert direct_contact_phone(group) is None
 
     own = normalize_wame_events({
         "object": "wame", "provider": "whatsapp",

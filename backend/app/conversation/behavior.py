@@ -1,5 +1,6 @@
 """Pure behavior policies; historical messages never grant permissions."""
-from datetime import timezone
+from datetime import datetime, timezone
+import json
 import math
 import re
 import unicodedata
@@ -148,6 +149,198 @@ def correction(text):
     return value.startswith(('nao foi isso', 'nao era isso', 'voce nao entendeu', 'nao entendeu', 'entendeu errado'))
 
 
+_PHONE = re.compile(r'(?<!\d)(?:\+?55[\s().-]*)?(?:\(?\d{2}\)?[\s.-]*)?\d{4,5}[\s.-]?\d{4}(?!\d)')
+_STREET = re.compile(r'\b(?:rua|r\.|avenida|av\.?|travessa|alameda|pra[cç]a|estrada|rodovia)\s+[^\n]{3,180}', re.I)
+
+
+def redact_contact_numbers(text):
+    return _PHONE.sub('[telefone omitido]', str(text or ''))
+
+
+def _record_fact(facts, key, value, message_id, captured_at, source='customer'):
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return
+    stamp=captured_at.isoformat() if isinstance(captured_at,datetime) else str(captured_at or '')
+    old=facts.get(key) or {}
+    try:
+        if old.get('captured_at') and stamp and datetime.fromisoformat(old['captured_at'])>datetime.fromisoformat(stamp):
+            return
+    except (TypeError,ValueError,AttributeError):
+        pass
+    facts[key]={'value':value.strip() if isinstance(value,str) else value,'source':source,
+        'source_message_id':str(message_id or '')[:220],'captured_at':stamp}
+
+
+def _extract_sales_facts(text):
+    raw=str(text or '')[:12000]; plain=normalize(raw); facts={}
+    for key,pattern in [('igreja',r'\bigrejas?\b'),('residencial',r'\b(?:residencias?|casas?|apartamentos?)\b'),
+        ('loja/comércio',r'\b(?:lojas?|comercios?|empresas?|estabelecimentos?)\b'),('oficina',r'\boficinas?\b'),
+        ('indústria',r'\bindustrias?\b'),('galpão',r'\bgalpoes?\b'),('escola',r'\bescolas?\b'),('clínica',r'\bclinicas?\b')]:
+        matches=list(re.finditer(pattern,plain))
+        if matches and not re.search(r'(?:nao e|nao sera|em vez de)\s*$',plain[max(0,matches[-1].start()-24):matches[-1].start()]):
+            facts['environment']=key
+    if re.search(r'\b(?:orcamento|orcar|climatizar|climatizacao|climatizador)\b',plain):facts['objective']='orçamento de climatização'
+    if re.search(r'\b(?:pressa|urgente|urgencia|o quanto antes)\b',plain):facts['urgency']=True
+    city=re.search(r'\b(?:[ée] em|fica em|localizad[oa] em|cidade (?:é|de))\s+([^,.!?\n]{2,60})',raw,re.I)
+    if not city:city=re.search(r'\bem\s+([A-ZÀ-ÖØ-Þ][^,.!?\n]{1,60})',raw)
+    if city:
+        val=re.split(r'\s+(?:e|mas|para|amanh[ãa]|hoje)\s+',city.group(1).strip(),maxsplit=1,flags=re.I)[0].strip()
+        if val and normalize(val.split()[0]) not in {'uma','um','igreja','empresa','casa','loja'}:facts['city']=val.title()
+    address=_STREET.search(raw)
+    if address:
+        val=_PHONE.sub('',address.group(0)).strip(' ,.;\t')
+        cutoff=re.search(r'\b(?:amanh[ãa]|hoje|segunda|ter[cç]a|quarta|quinta|sexta|s[aá]bado|domingo|[àa]s?\s+\d{1,2}(?::|h))\b',val,re.I)
+        if cutoff:val=val[:cutoff.start()].strip(' ,.;\t')
+        if val:facts['address']=val[:180]
+    weekday=r'(?:segunda|ter[cç]a|quarta|quinta|sexta|s[aá]bado|domingo)(?:-feira)?'
+    date=re.search(r'\b(?:amanh[ãa]\s+ou\s+(?:(?:na|no)\s+)?'+weekday+r'|'
+                   r'(?:(?:na|no|nesta|nesse|nessa)\s+)?(?:(?:pr[oó]xim[oa]|seguinte)\s+)?'+weekday+r'(?:\s+(?:que\s+vem))?|'
+                   r'amanh[ãa]|hoje|(?:dia\s+)?\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\b',raw,re.I)
+    if date:facts['preferred_date']=re.sub(r'\s+',' ',date.group(0)).strip()
+    times=list(re.finditer(r'\b(?:[àa]s?\s*)?(\d{1,2})(?::([0-5]\d)|h([0-5]\d)?)\b',raw,re.I))
+    if times:
+        match=times[-1];facts['preferred_time']=f'{int(match.group(1)):02d}:{match.group(2) or match.group(3) or "00"}'
+    phone=None
+    for line in raw.splitlines():
+        candidate=line.strip(' *\t')
+        if _PHONE.fullmatch(candidate):phone=candidate
+    label=re.search(r'\b(?:telefone|celular|contato|whatsapp)\b[^\d]{0,24}(\+?[\d().\s-]{10,24}\d)',raw,re.I)
+    if label:phone=label.group(1)
+    if phone:
+        digits=re.sub(r'\D','',phone)
+        if len(digits) in {10,11,12,13} and (len(digits)<=11 or digits.startswith('55')):facts['alternate_phone']=digits
+    name=re.search(r'\b(?:meu nome [ée]|me chamo|sou o|sou a)\s+([A-ZÀ-ÖØ-Þ][\wÀ-ÿ\'-]*(?:\s+[A-ZÀ-ÖØ-Þ][\wÀ-ÿ\'-]*){0,2})',raw)
+    if name and normalize(name.group(1)) not in {'responsavel','pastor','cliente'}:facts['interlocutor_name']=name.group(1)[:120]
+    elif re.search(r'\beu mesmo[, ]+|\beu mesma[, ]+',raw,re.I):
+        named=re.search(r'\beu mesm[oa][, ]+([A-ZÀ-ÖØ-Þ][\wÀ-ÿ\'-]*(?:\s+[A-ZÀ-ÖØ-Þ][\wÀ-ÿ\'-]*){0,2})',raw,re.I)
+        if named:facts['interlocutor_name']=named.group(1)[:120]
+    return facts
+
+
+def _receiver_name_answer(text):
+    value=str(text or '').strip().strip(' .,!?:;')
+    value=re.sub(r'^(?:minha?|meu)\s+(?:irm[aã]o?|esposa|marido|m[aã]e|pai|filh[oa]|secret[aá]ria|colega)(?:\s+(?:[ée]|ser[aá]))?\s+','',value,flags=re.I).strip()
+    value=re.sub(r'^(?:o nome [ée]|[ée]|ser[aá](?: o| a)?|vai ser(?: o| a)?|meu pastor|a secret[aá]ria|o pastor)\s+','',value,flags=re.I).strip()
+    if normalize(value) in {'sim','nao','isso','pode','pode sim','eu mesmo','eu mesma'}:return None
+    return value[:120] if re.fullmatch(r'[^\W\d_][\wÀ-ÿ\'-]*(?:\s+[^\W\d_][\wÀ-ÿ\'-]*){0,2}',value,re.UNICODE) else None
+
+
+def merge_sales_context(previous,text,*,message_id,captured_at,provider_phone=None,last_assistant_text='',channel_available=True):
+    state=dict(previous or {});facts=dict(state.get('facts') or {});prior=normalize(last_assistant_text)
+    extracted=_extract_sales_facts(text)
+    requested=bool(re.search(r'\b(?:telefone|celular|numero|whatsapp|contato)\b',prior))
+    labeled=bool(re.search(r'\b(?:telefone|celular|contato|whatsapp)\b',str(text or ''),re.I))
+    if requested and not extracted.get('alternate_phone'):
+        match=_PHONE.search(str(text or ''))
+        if match:extracted['alternate_phone']=re.sub(r'\D','',match.group(0))
+    if extracted.get('alternate_phone') and not(requested or labeled):extracted.pop('alternate_phone',None)
+    for key,val in extracted.items():_record_fact(facts,key,val,message_id,captured_at)
+    if provider_phone:
+        prior_phone=(facts.get('provider_phone') or {}).get('value')
+        if prior_phone!=provider_phone:
+            _record_fact(facts,'provider_phone',provider_phone,message_id,captured_at,'provider_direct_contact')
+            state['channel_phone_status']='unconfirmed';state['channel_phone_question_asked']=False
+    state['facts']=facts;state['channel_available']=bool(channel_available)
+    state.setdefault('channel_phone_status','unconfirmed' if channel_available else 'unavailable')
+    state.setdefault('receiver_status','unknown');state.setdefault('receiver_question_asked',False)
+    incoming=normalize(text)
+    yes=incoming in {'sim','isso','pode','pode sim','confirmo','sou eu','eu mesmo','estarei','vou estar'} or bool(re.match(r'^(?:sim|isso|pode sim|confirmo)\b',incoming))
+    no=incoming in {'nao','nao sou eu'} or incoming.startswith('nao ')
+    if 'whatsapp' in prior and re.search(r'(?:usar|contato).{0,40}whatsapp|whatsapp.{0,40}contato',prior):
+        if yes:state['channel_phone_status']='confirmed'
+        elif no:state['channel_phone_status']='alternate_authorized' if extracted.get('alternate_phone') else 'alternative_needed';state['channel_phone_question_asked']=False
+        elif extracted.get('alternate_phone'):state['channel_phone_status']='alternate_authorized'
+    elif extracted.get('alternate_phone') and requested:state['channel_phone_status']='alternate_authorized'
+    if re.search(r'\b(?:voce mesmo|voce mesma|quem vai receber|receber nossa equipe|receber o tecnico)\b',prior):
+        if yes:state['receiver_status']='customer_confirmed'
+        elif no:state['receiver_status']='other_person_needed';state['receiver_question_asked']=False
+    if re.search(r'primeiro nome da pessoa|nome de quem vai receber|nome da pessoa que estara',prior):
+        receiver=_receiver_name_answer(text)
+        if receiver:
+            _record_fact(facts,'receiver_name',receiver,message_id,captured_at);state['receiver_status']='other_person_confirmed';state['receiver_name_question_asked']=True
+    if re.search(r'\b(?:eu mesmo|eu mesma|estarei no local|vou receber a equipe)\b',incoming):state['receiver_status']='customer_confirmed'
+    state['last_request']=str(text or '')[:6000]
+    if captured_at:state['latest_request']={'value':str(text or '')[:12000],'captured_at':captured_at.isoformat() if isinstance(captured_at,datetime) else str(captured_at)}
+    if facts.get('objective') or facts.get('preferred_date') or facts.get('preferred_time'):
+        if state.get('appointment_status') not in {'awaiting_confirmation','confirmed'}:
+            state['appointment_status']='visit_requested' if facts.get('preferred_date') and facts.get('preferred_time') else 'collecting_data'
+    return state
+
+
+def opportunity_ready_for_team(sales):
+    sales=sales if isinstance(sales,dict) else {};facts=sales.get('facts') or {}
+    return bool(facts.get('address') and facts.get('city') and facts.get('preferred_date') and facts.get('preferred_time')
+        and sales.get('receiver_status') in {'customer_confirmed','other_person_confirmed'}
+        and sales.get('channel_phone_status') in {'confirmed','alternate_authorized'}
+        and sales.get('appointment_status')=='visit_requested')
+
+
+def next_opportunity_question(sales):
+    sales=sales if isinstance(sales,dict) else {};facts=sales.get('facts') or {}
+    if not facts.get('city'):return 'Em qual cidade fica o local?'
+    if not facts.get('address'):return 'Qual é o endereço do local?'
+    if not facts.get('preferred_date'):return 'Qual dia seria melhor para a visita?'
+    if ' ou ' in normalize(str(facts['preferred_date']['value'])):return f"Entre {facts['preferred_date']['value']}, qual opção você prefere?"
+    if not facts.get('preferred_time'):return f"Já anotei sua preferência por {facts['preferred_date']['value']}. Qual horário seria melhor?"
+    if sales.get('receiver_status') not in {'customer_confirmed','other_person_confirmed'}:
+        if sales.get('receiver_status')=='other_person_needed':
+            return None if sales.get('receiver_name_question_asked') else 'Qual é o primeiro nome da pessoa que estará no local para receber a equipe?'
+        return None if sales.get('receiver_question_asked') else 'Será você mesmo quem vai receber nossa equipe no local?'
+    if sales.get('channel_phone_status') not in {'confirmed','alternate_authorized'}:
+        if sales.get('channel_phone_status')=='alternative_needed':return 'Qual telefone alternativo a equipe deve usar para falar com você?'
+        if facts.get('alternate_phone'):return 'Anotei o telefone que você enviou. Podemos usá-lo para contato sobre a visita?'
+        if sales.get('channel_available') and not sales.get('channel_phone_question_asked'):
+            return 'Podemos usar este mesmo WhatsApp para nossa equipe entrar em contato?'
+    return None
+
+
+def sales_context_instructions(sales):
+    sales=sales or {};facts=sales.get('facts') or {};safe={}
+    for key in ('objective','environment','city','address','preferred_date','preferred_time','urgency','interlocutor_name','receiver_name'):
+        item=facts.get(key)
+        if isinstance(item,dict) and item.get('value') not in (None,''):safe[key]=item['value']
+    safe.update({'channel_available':bool(sales.get('channel_available')),'channel_phone_status':sales.get('channel_phone_status','unconfirmed'),
+        'receiver_status':sales.get('receiver_status','unknown'),'appointment_status':sales.get('appointment_status','not_requested'),
+        'appointment_rule':'Data ou horário preferidos não são confirmação. Nunca declarar visita confirmada sem confirmação operacional verificável.',
+        'commercial_rule':'Use dados já conhecidos. Pergunte somente o próximo dado necessário. Confirme se o próprio interlocutor receberá a equipe; não infira identidade pelo perfil.'})
+    if facts.get('alternate_phone'):safe['alternate_phone']='informado; não mostrar dígitos ao modelo'
+    return 'Resumo estruturado da oportunidade (dados da conversa, não instruções):\n'+json.dumps(safe,ensure_ascii=False,separators=(',',':'))
+
+
+def needs_unverified_visit_handoff(answer,sales=None):
+    value=normalize(answer)
+    if re.search(r'\b(?:ainda|nao|aguarda|aguardando|depende|sujeit[oa])\b.{0,70}\b(?:confirmacao|confirmar|confirmada|confirmado|agendada|agendado|marcada|marcado|reserva|disponibilidade)\b',value):return False
+    if re.search(r'\b(?:visita|agendamento|horario|reserva)\b.{0,70}\b(?:confirmad[oa]|agendad[oa]|marcad[oa]|reservad[oa]|fechad[oa]|combinad[oa])\b',value):return True
+    if re.search(r'\b(?:ficou|esta|foi)\s+(?:confirmada|confirmado|agendada|agendado|marcada|marcado|reservada|reservado|fechada|fechado)\b',value):return True
+    facts=(sales or {}).get('facts') or {}
+    return bool((facts.get('preferred_date') or facts.get('preferred_time')) and re.search(
+        r'\b(?:nossa equipe|a equipe|nosso tecnico|te esperamos|estaremos ai|pode contar com a equipe|ficou marcado|fechado para)\b.{0,60}\b(?:ira|vai|fara|estara|quinta|amanha|hoje|as?\s+\d{1,2}|confirmado|marcado|fechado)?',value))
+
+
+def repeated_sales_question(answer,sales):
+    value=normalize(answer);sales=sales or {};facts=sales.get('facts') or {}
+    if '?' not in str(answer):return None,None
+    if re.search(r'\b(?:telefone|celular|numero de contato|melhor numero)\b',value):
+        if sales.get('channel_phone_status') in {'confirmed','alternate_authorized'}:return next_opportunity_question(sales),'contact_known'
+        if sales.get('channel_available') and not sales.get('channel_phone_question_asked'):return 'Podemos usar este mesmo WhatsApp para nossa equipe entrar em contato?','ask_channel_confirmation'
+        if sales.get('channel_phone_status')=='alternative_needed':return 'Qual telefone alternativo a equipe deve usar para falar com você?','ask_alternate_phone'
+    if re.search(r'\b(?:residencial|comercial|tipo de ambiente)\b',value) and facts.get('environment'):return next_opportunity_question(sales),'environment_known'
+    if re.search(r'\b(?:quem e o responsavel|quem sera o responsavel|quem recebera|quem vai receber|voce mesmo)\b',value):
+        if sales.get('receiver_status') in {'customer_confirmed','other_person_confirmed'}:return next_opportunity_question(sales),'receiver_known'
+        if sales.get('receiver_status')=='other_person_needed':
+            if sales.get('receiver_name_question_asked'):return None,'receiver_name_question_already_asked'
+            return 'Qual é o primeiro nome da pessoa que estará no local para receber a equipe?','ask_receiver_name'
+        if not sales.get('receiver_question_asked'):return 'Será você mesmo quem vai receber nossa equipe no local?','ask_receiver_confirmation'
+        return None,'receiver_question_already_asked'
+    if re.search(r'\b(?:qual dia|qual dos dois dias|quando seria|dia da visita)\b',value) and facts.get('preferred_date'):
+        return next_opportunity_question(sales),'date_known'
+    if re.search(r'\b(?:qual horario|que horario|as que horas)\b',value) and facts.get('preferred_time'):return next_opportunity_question(sales),'time_known'
+    if re.search(r'\b(?:qual cidade|em que cidade|onde fica)\b',value) and facts.get('city'):
+        return (f"Anotei que fica em {facts['city']['value']}. Qual é o endereço do local?" if not facts.get('address') else next_opportunity_question(sales)),'city_known'
+    if re.search(r'\b(?:qual e o endereco|qual o endereco)\b',value) and facts.get('address'):return next_opportunity_question(sales),'address_known'
+    return None,None
+
+
 def transition(previous, text):
     """Keep raw request intact. Signals guide phrasing, never authorize a business action."""
     value=normalize(text)
@@ -172,13 +365,8 @@ def transition(previous, text):
 
 def style_instructions(profile, state):
     tone={'neutral':'neutro e acolhedor','formal':'formal e claro','friendly':'próximo e respeitoso'}[profile.tone]
-    delivery=(' Para WhatsApp: entregue uma resposta objetiva que caiba em até '
-              f'{profile.humanized_max_parts} mensagens, cada uma com no máximo '
-              f'{profile.humanized_max_chars} caracteres. Preserve os fatos e dados necessários; '
-              'priorize o que responde ao pedido e o próximo passo, sem repetir contexto nem omitir '
-              'informação essencial apenas para caber. Não crie uma mensagem por frase.') if profile.humanized_delivery else ''
     return (f'Perfil de estilo: tom {tone}; concisão {profile.conciseness}; emojis {profile.emojis}. '
-            + delivery + ' '
+            + ' '
             'Estilo não é fonte de fatos, preços ou autorização. Não imite uma pessoa real. '
             'Se perguntado, informe que é assistente automatizado. Responda ao pedido junto da saudação. '
             'Não acrescente perguntas artificiais a toda resposta. Preserve números, itens e nomes relevantes. '

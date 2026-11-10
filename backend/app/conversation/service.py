@@ -34,7 +34,9 @@ def action(db, conversation, action_name, operator_id=None):
     conversation.turn_started_at=None
     # Resume requires a fresh inbound; don't regenerate the question a human already answered.
     conversation.response_attempts=3
-    conversation.context_state={};conversation.context_expires_at=None
+    sales_context=(conversation.context_state or {}).get('sales_context')
+    conversation.context_state={'sales_context':sales_context} if sales_context else {}
+    conversation.context_expires_at=None
     if action_name=='resume':
         instance=db.query(ZapiInstance).filter_by(id=conversation.instance_id,tenant_id=conversation.tenant_id).first()
         agent=db.query(Agent).filter_by(id=instance.agent_id,tenant_id=conversation.tenant_id).first() if instance and instance.agent_id else None

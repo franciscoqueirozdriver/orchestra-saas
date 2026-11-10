@@ -13,15 +13,28 @@ entrada reconhece os dois adaptadores.
 6. **Envio.** Respostas humanas e automáticas entram na outbox. O dispatcher revalida empresa, política, agente/revisão e limite de frequência, persiste `dispatching` antes do efeito externo e usa `transport.for_instance` para chamar Z-API ou WAME. Status HTTP aceito não garante entrega. Timeout, 429, 5xx ou ausência de identificador podem resultar em `unknown`; não há retry cego desses efeitos.
 7. **Callbacks e recuperação.** Eventos de status são correlacionados com mensagens enviadas e avançam estados sem regressão. O scheduler e as tarefas de recuperação redespacham eventos duráveis pendentes e outbox recuperável; envio interrompido em estado incerto não é reenviado automaticamente.
 
+## Continuidade conversacional e dados de visita — implementação local na branch
+
+O worker mantém um resumo estruturado e temporário dentro de `Conversation.context_state`, ao lado do histórico normal de `Message`. A extração registra fatos explícitos com origem, ID da mensagem e horário, para preservar tipo de ambiente, objetivo, cidade, endereço, preferência de data/horário, urgência, telefone e pessoa que receberá a equipe. A entrada nova atualiza esse resumo durante o processamento do evento; fatos anteriores mais novos não são substituídos por callbacks atrasados. A ação de assumir/retomar preserva o resumo. Para uma conversa existente sem esse resumo, a primeira geração o reconstrói dos últimos 200 registros de mensagem; não faz backfill ilimitado e respeita expiração já aplicada.
+
+O telefone de retorno pode vir somente do campo `phone` numérico do evento direto, nunca de LID, alias de participante ou grupo. Esse metadado fica como não confirmado até consentimento contextual do cliente. Quando a conversa já fornece um WhatsApp, o próximo passo pergunta se esse canal pode ser usado para retorno; se o cliente recusar, pode informar outro número. Dígitos de contato são ocultados do contexto enviado ao modelo e das consultas de embeddings. Um alternativo é incluído ao contexto da equipe somente depois de autorizado.
+
+A pergunta sobre recepção da equipe só aparece quando cidade, endereço, data e horário já estão coletados. Primeiro se confirma se o interlocutor estará no local. Se não, pede-se o nome da pessoa que receberá a equipe; isso não atribui a ela papel de decisor comercial. Os mecanismos são globais ao núcleo de conversação; perfil do agente continua sendo a fonte de especialidade, produtos, tom e objetivo comercial.
+
+Preferências do cliente nunca viram reserva confirmada. Quando os dados exigidos estão completos, o backend cria a solicitação de intervenção existente e pode alertar o grupo se ele estiver configurado/validado. A resposta ao cliente diz que a visita ainda aguarda confirmação. Sem integração de agenda ou confirmação formal, o código não promove o estado para `confirmed`. Se o alerta do grupo não for confirmado, a mensagem informa essa falha e o ticket fica para revisão humana. Não há nova tabela nem migration.
+
+Os testes usam mensagens, números e nomes sintéticos. A extração é determinística e conservadora, não um interpretador completo de linguagem: mensagens ambíguas podem deixar um campo pendente e exigir nova pergunta ou intervenção. “Próxima quinta” é preservada como preferência textual; não é convertida para data absoluta sem fuso horário de negócio configurado. Histórico e resumo estruturado são complementares; o resumo expira pela política de contexto configurada.
+
 ## Fragmentação humanizada — implementação local na branch
 
-Quando `ConversationProfile.enabled` e `humanized_delivery` estão ativos, `tasks.py`
-usa `split_reply_conversational` para agrupar frases e parágrafos sem alterar o texto.
-O alvo padrão é 180 caracteres, o máximo por parte é 300 e o máximo é três partes;
-há intervalo durável configurável de 1–5 segundos (padrão 2). Respostas curtas ficam
-inteiras. URLs, valores monetários e padrões comuns de telefone são protegidos contra
-cortes. Se o texto não couber com segurança, a geração é encaminhada ao fluxo de
-intervenção em vez de ser truncada ou enviada como um bloco fora dos limites.
+Em toda resposta automática de WhatsApp, `tasks.py` usa `split_reply_conversational`
+para agrupar frases e parágrafos sem alterar o texto. A política é global e não depende
+do perfil de estilo do agente: respostas curtas ficam inteiras; o máximo é três partes
+de 300 caracteres, com alvo de 180 e intervalo durável fixo de 2 segundos. URLs,
+valores monetários e padrões comuns de telefone são protegidos contra cortes. Se o texto
+não couber com segurança, a geração é encaminhada à intervenção em vez de ser truncada.
+Os campos legados `humanized_delivery` e parâmetros de tamanho continuam aceitos pelo
+schema por compatibilidade, mas não controlam mais a segmentação.
 
 As partes continuam em `outbox_parts` e são despachadas uma a uma pelo serviço
 existente. A entrada e o dispatcher compartilham o lock advisory por tenant. Quando o
@@ -50,11 +63,12 @@ Como o lock do tenant permanece ocupado enquanto o transporte responde, uma cham
 lenta também pode atrasar o aceite durável de webhooks dessa empresa; validar esse efeito
 sob latência de provedor é parte da homologação controlada.
 WAME e Z-API continuam com `composing` desativado nos adaptadores locais; a melhoria
-funciona sem indicador de digitação. A opção é explícita por agente e não ativa por
-padrão nos perfis existentes. Não há migration nem homologação de provedor nesta
-alteração. Com a opção ativa, as instruções iniciais pedem resposta completa e concisa
-em até três partes; não há uma segunda chamada ao modelo para encurtar. Se a resposta
-exceder o limite, o fluxo existente de intervenção é acionado.
+funciona sem indicador de digitação. O prompt global pede resposta completa e concisa
+em até três partes; não há uma segunda chamada ao modelo para encurtar. Se exceder o
+limite, o fluxo existente de intervenção é acionado. O fluxo comercial de visita é
+separado e depende da capacidade `visit_booking_enabled` no perfil do agente, que inicia
+desativada; agentes sem essa capacidade não recebem coleta nem encaminhamento de visita.
+Não há migration nem homologação de provedor nesta alteração.
 
 ## Pontos de privacidade e homologação
 
@@ -69,4 +83,5 @@ exceder o limite, o fluxo existente de intervenção é acionado.
 - Worker, contexto, geração e recuperação: `backend/app/tasks.py`, `model_router.py`, `scheduler.py`.
 - Transporte e efeito externo: `backend/app/transport.py`, `zapi_client.py`, `wame_client.py`, `outbox.py`.
 - Intervenção: `backend/app/interventions.py`, `backend/app/routes_conversations.py`.
+- Estado estruturado, detecção de pergunta repetida e guardas de agenda: `backend/app/conversation/behavior.py`, `backend/app/tasks.py`; número direto: `backend/app/zapi_payload.py`.
 - Cobertura: `tests/test_zapi.py`, `tests/test_wame.py`, `tests/integration/test_runtime_safety.py`, `tests/test_scheduler_contract.py`.

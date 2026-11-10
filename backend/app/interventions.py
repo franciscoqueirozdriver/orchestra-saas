@@ -32,7 +32,16 @@ def context_for(db, conversation, reason):
         lines.append(f'{author}: {row.content[:700]}')
     history='\n'.join(lines)[-3600:]
     contact = conversation.contact_name.strip() or conversation.contact_key
-    return (f'Atendimento {reason}. Contato: {contact}. Identificador: {conversation.contact_key}.\n'
+    state=(conversation.context_state or {}).get('sales_context') or {};facts=state.get('facts') or {};summary=[]
+    for key,label in [('environment','Ambiente'),('objective','Objetivo'),('city','Cidade'),('address','Endereço'),('preferred_date','Data pretendida'),('preferred_time','Horário pretendido'),('receiver_name','Pessoa que receberá')]:
+        item=facts.get(key)
+        if isinstance(item,dict) and item.get('value'):summary.append(f'{label}: {str(item["value"])[:180]}')
+    if state.get('channel_phone_status') in {'confirmed','alternate_authorized'}:
+        item=facts.get('alternate_phone') if state['channel_phone_status']=='alternate_authorized' else facts.get('provider_phone')
+        if isinstance(item,dict) and item.get('value'):summary.append('Telefone autorizado para retorno: '+str(item['value'])[:24])
+    summary.extend(['Recebedor: '+str(state.get('receiver_status','unknown')),'Situação da visita: '+str(state.get('appointment_status','not_requested'))])
+    sales='\nResumo comercial estruturado:\n'+'\n'.join(summary) if summary else ''
+    return (f'Atendimento {reason}. Contato: {contact}. Identificador: {conversation.contact_key}.{sales}\n'
             f'Histórico recente (mais antigo primeiro):\n{history or "Sem mensagens anteriores registradas."}')[:3900]
 
 
