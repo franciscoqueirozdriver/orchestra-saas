@@ -8,6 +8,12 @@ publicação. Git local exibia dois caminhos não rastreados:
 `Kit Marca/` e `docs/conhecimento/base-atendimento-climatiza-brasil.md`. Seus conteúdos
 foram preservados e não foram inspecionados nem adicionados nesta sincronização.
 
+**Atualização posterior em 11/11/2026:** o commit `929561e327163d4a9bb11abc9a0f418f3542a462`
+foi enviado a `origin/main` e a branch local `main` avançou ao mesmo SHA. O deploy dessa
+revisão ainda não foi confirmado. A última revisão de aplicação confirmada na VPS
+continua sendo `1f7d1a8333518f0b41d96d72676fd78cd759a8cb`; nova verificação SSH falhou
+porque o agente recusou assinar com a chave carregada. Não inferir sincronização VPS.
+
 Esta página é um snapshot do checkout, não um atestado de produção. “Implementado”
 significa que o código correspondente existe; não implica execução, CI verde ou
 homologação de fornecedor.
@@ -86,11 +92,19 @@ e no worker. Detalhes em `docs/handoff/2026-11-10-publicacao-enrico.md`.
 
 **TESTADO em 10/11/2026:** 154 testes unitários passaram; 58 testes de integração passaram no PostgreSQL descartável e 2 testes de consolidação de migrations foram pulados porque a baseline histórica não estava disponível. Os testes sintéticos cobrem conversa preexistente, igreja, escolha de data/horário, retorno por telefone autorizado, tentativa do modelo de confirmar sem agenda, recebedor terceiro, grupo de atendimento não configurado, datas alternativas e isolamento do fluxo de visitas por capacidade de agente. Sem chamadas reais a fornecedores. Consulte `docs/handoff/2026-11-10-contexto-conversacional-global.md`.
 
-**TESTADO em 11/11/2026 na branch local `fix/enrico-live-visit-followups`:** 148 testes unitários passaram, excluindo os seis testes do módulo `test_release_guard.py`; 59 testes da suíte completa de integração passaram e 2 testes de consolidação de migrations foram pulados por falta da baseline histórica. A interpretação contextual de “Claro” foi simulada com resposta estruturada do modelo; não houve chamada a LLM ou WhatsApp. Uma execução da suíte unitária completa teve 152 aprovados e 3 falhas ambientais: checkout read-only sem `safe.directory` e dois fixtures de deploy sem `.env`.
+**TESTADO em 11/11/2026 no commit `929561e`:** 148 testes unitários passaram, excluindo os seis testes do módulo `test_release_guard.py`; 59 testes da suíte completa de integração passaram e 2 testes de consolidação de migrations foram pulados por falta da baseline histórica. A interpretação contextual de “Claro” foi simulada com resposta estruturada do modelo; não houve chamada a LLM ou WhatsApp. Uma execução da suíte unitária completa teve 152 aprovados e 3 falhas ambientais: checkout read-only sem `safe.directory` e dois fixtures de deploy sem `.env`.
 
 **NÃO HOMOLOGADO:** a extração de fatos explícitos ainda é determinística; resposta semântica depende da capacidade do provedor de seguir o envelope e interpretar o histórico. Saída inválida é encaminhada para intervenção. Não há integração de agenda e não foram homologados fornecedores, grupo real nem a experiência desta branch com clientes.
 
-## Git e publicação — estado verificado em 10/11/2026
+## Git e publicação — atualização em 11/11/2026
+
+O commit `929561e327163d4a9bb11abc9a0f418f3542a462` está na branch local `main` e em
+`origin/main`. A VPS não foi atualizada nesta sessão. O último release conhecido na VPS
+é `1f7d1a8333518f0b41d96d72676fd78cd759a8cb`, de acordo com a checagem anterior; não foi
+possível verificar novamente o checkout remoto porque o agente SSH recusou assinar.
+Os dois caminhos privados não rastreados foram preservados e continuam fora do commit.
+
+## Histórico da sincronização anterior
 
 O histórico da tentativa inicial de sincronização está preservado em
 [`2026-11-10-tentativa-sincronizacao.md`](../handoff/2026-11-10-tentativa-sincronizacao.md).

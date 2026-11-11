@@ -39,8 +39,8 @@ Sem migration, tabela nova, alteração de perfil comercial, chamada externa a L
 
 ## Próxima ação
 
-Revisar o diff e, após autorização específica, publicar a branch/commit pelo fluxo oficial. Homologar primeiro em uma conversa de teste consentida com o provedor efetivamente selecionado; conferir se o modelo responde no envelope, reconhece “Claro” no contexto e não repete perguntas. Não declarar a visita confirmada sem confirmação operacional humana.
+Homologar em uma conversa de teste consentida com o provedor efetivamente selecionado; conferir se o modelo responde no envelope, interpreta “Claro” pelo contexto e não repete perguntas. O commit está em `origin/main`, mas ainda precisa do release controlado para a VPS. O último SHA de aplicação confirmado na VPS é `1f7d1a8333518f0b41d96d72676fd78cd759a8cb`; uma nova verificação falhou porque o agente SSH recusou assinar com a chave carregada. Retomar o deploy somente quando o checkout remoto, a fila e o procedimento de rollback puderem ser conferidos. Não declarar a visita confirmada sem validação operacional humana.
 
 ## Git final
 
-Branch `fix/enrico-live-visit-followups`; alterações de código/teste/documentação sem commit ou push. VPS e GitHub não foram alterados. Permanecem os dois caminhos privados não rastreados do estado inicial.
+Commit de implementação `929561e327163d4a9bb11abc9a0f418f3542a462` foi enviado a `origin/main`, e `main` local foi avançada para esse commit; um follow-up documental registra o bloqueio do deploy. A branch `fix/enrico-live-visit-followups` permanece no commit de implementação. Worktree limpo para arquivos rastreados; permanecem fora dos commits `Kit Marca/` e `docs/conhecimento/base-atendimento-climatiza-brasil.md`. VPS sem sincronização confirmada e sem deploy.
