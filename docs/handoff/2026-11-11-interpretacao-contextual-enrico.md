@@ -98,3 +98,24 @@ O último estado confirmado da VPS continua sendo o descrito acima; SSH não con
 autenticar, portanto não houve sync nem deploy. Os caminhos privados
 `Kit Marca/` e `docs/conhecimento/base-atendimento-climatiza-brasil.md` permanecem
 fora do Git.
+
+## Publicação e sincronização em 11/11/2026
+
+Após a chave SSH ser carregada, a checagem oficial confirmou checkout remoto limpo em
+`18643f183b1d8fb11689587c9fbb157f61e0f852`, destino descendente `cf2ed78` alcançável
+por `origin/main`, banco `0010_wame_api_base_url` e nenhuma alteração de migration.
+O CI do GitHub reportou `success` para `cf2ed7830c03337212c0d927f5a1f93cf9034630`.
+
+O helper `scripts/release.py` publicou esse SHA sem `--allow-outbound`. A API, worker e
+scheduler passaram a usar `sha256:6bd1e808f421ace6ab02591aa97dd3e0d8dc89fcd019d740ab141d10af65f600`;
+Redis e PostgreSQL permaneceram saudáveis. O worker respondeu `pong`, `/health`
+retornou `{"ok":true}` e a página pública respondeu HTTP 200. `OUTBOUND_ENABLED=false`
+foi conferido em API, worker e scheduler. Nenhuma mensagem real foi enviada, migration
+executada ou Edge Function encontrada no repositório.
+
+O release criou backup criptografado e recibo privado. A cópia off-site do backup e um
+ensaio de restauração não foram confirmados. O SHA `cf2ed78` sincronizou código e
+documentação antes deste registro posterior; este handoff e os documentos canônicos
+serão commitados e sincronizados em seguida para deixar os três checkouts no mesmo
+commit. O conteúdo de `Kit Marca/` e a base de conhecimento privada ficaram fora do
+Git.

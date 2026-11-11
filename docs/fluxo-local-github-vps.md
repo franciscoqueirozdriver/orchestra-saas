@@ -1,22 +1,23 @@
 # Desenvolvimento local → GitHub → publicação na VPS
 
-Atualizado em 10/11/2026. A pasta local é o ambiente de desenvolvimento;
+Atualizado em 11/11/2026. A pasta local é o ambiente de desenvolvimento;
 GitHub `main` é a fonte compartilhada; `/opt/orquestra` é o checkout de publicação.
 Não editar código diretamente na VPS nem sincronizar mudanças dela de volta.
 
 ## Estado publicado
 
-O release atual da aplicação é `1f7d1a8333518f0b41d96d72676fd78cd759a8cb`. No deploy,
-API, worker e scheduler usaram a imagem `sha256:b5f29fd5617464b2efc9f92e6d73f5089bec75563c0fcef379f2f6bb4caee910`
-com label do SHA. A API respondeu no healthcheck, o painel retornou HTTP 200 e o
-worker respondeu ao ping do Celery. A revisão Alembic permaneceu
-`0010_wame_api_base_url`; não houve migration.
+O release atual da aplicação é `cf2ed7830c03337212c0d927f5a1f93cf9034630`. API,
+worker e scheduler usam a imagem `sha256:6bd1e808f421ace6ab02591aa97dd3e0d8dc89fcd019d740ab141d10af65f600`
+com label desse SHA. A API e o painel responderam por HTTPS (`/health` OK e página
+principal HTTP 200), serviços ficaram saudáveis e o worker respondeu ao ping do Celery.
+A revisão Alembic permaneceu `0010_wame_api_base_url`; não houve migration. A saída
+automática ficou explicitamente desativada em API, worker e scheduler.
 
 O checkout GitHub/local/VPS foi alinhado no SHA do release. O helper criou recibo
-privado e backup operacional criptografado em 10/11/2026; a existência dos artefatos
-foi verificada, mas cópia off-site e restauração de ensaio não foram confirmadas.
-O recibo terminou em `started_external_checks_pending`, estado esperado do helper.
-Ver o [handoff detalhado](handoff/2026-11-10-publicacao-enrico.md) e o registro
+privado e backup operacional criptografado em 11/11/2026; cópia off-site e
+restauração de ensaio continuam sem confirmação. O recibo terminou em
+`started_external_checks_pending`, estado esperado do helper. Ver o
+[handoff detalhado](handoff/2026-11-11-interpretacao-contextual-enrico.md) e o registro
 histórico de 06/11 em [publicação e ingestão](handoff/2026-11-06-publicacao-e-ingestao.md).
 
 O helper de release forçou `OUTBOUND_ENABLED=false` na API e no worker. Respostas
