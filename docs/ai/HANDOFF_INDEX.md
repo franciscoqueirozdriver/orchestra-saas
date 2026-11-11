@@ -11,6 +11,7 @@ não os transforma em retrato atual. Atualize-o ao adicionar handoffs relevantes
 | [`docs/handoff/2026-11-09-auditoria-continuidade.md`](../handoff/2026-11-09-auditoria-continuidade.md) | Auditoria deste snapshot, documentos examinados, divergências e validação da documentação | Usar para entender origem dos arquivos canônicos desta auditoria |
 | [`docs/handoff/2026-11-10-envio-humanizado.md`](../handoff/2026-11-10-envio-humanizado.md) | Implementação local opt-in de respostas em blocos via outbox, testes e limitações do ambiente | Conferir branch e estado Git no próprio handoff; não representa publicação ou homologação |
 | [`docs/handoff/2026-11-10-contexto-conversacional-global.md`](../handoff/2026-11-10-contexto-conversacional-global.md) | Contexto estruturado global, confirmação contextual de contato, recebedor de visita e prevenção de falsa confirmação | Mudança local em `feat/enrico-context-booking`; consultar resultados, limitações e Git final; não representa deploy |
+| [`docs/handoff/2026-11-10-tentativa-sincronizacao.md`](../handoff/2026-11-10-tentativa-sincronizacao.md) | Commit local autorizado, tentativa de publicar `main`, verificação de acesso ao GitHub/VPS e ausência de migrations | Estado confirmado em 10/11/2026; retomar somente após recuperar conectividade/autenticação e repetir preflight |
 
 O handoff de 06/11 evoluiu em commits `d8d04b3`, `a07dc7d` e `621d926` (importação
 histórica), culminando no arquivo atual. Use `git show <commit>:<caminho>` se for

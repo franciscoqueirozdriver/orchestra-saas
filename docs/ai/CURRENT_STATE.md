@@ -96,3 +96,21 @@ processado para a conversa. Não houve commit, publicação ou alteração na VP
 **TESTADO em 10/11/2026:** 154 testes unitários passaram; 58 testes de integração passaram no PostgreSQL descartável e 2 testes de consolidação de migrations foram pulados porque a baseline histórica não estava disponível. Os testes sintéticos cobrem conversa preexistente, igreja, escolha de data/horário, retorno por telefone autorizado, tentativa do modelo de confirmar sem agenda, recebedor terceiro, grupo de atendimento não configurado, datas alternativas e isolamento do fluxo de visitas por capacidade de agente. Sem chamadas reais a fornecedores. Consulte `docs/handoff/2026-11-10-contexto-conversacional-global.md`.
 
 **NÃO HOMOLOGADO:** extração determinística pode não reconhecer mensagens ambíguas; não há integração de agenda e não foram homologados fornecedores, grupo real nem a experiência com clientes. O estado da VPS e publicação não foram consultados nem alterados.
+
+## Sincronização autorizada — verificação de 10/11/2026
+
+O commit `d17d85a07c760275d59efe604b90eef03a46067b` está confirmado no checkout
+local `main`. A verificação de migrations mostrou que a mudança não altera
+`backend/migrations/`; o novo campo de capacidade reside no JSON já existente do perfil.
+Os testes locais registrados acima foram executados antes do commit. A branch de
+trabalho também aponta para esse commit.
+
+**GitHub e VPS não estão confirmados como sincronizados.** O ref local em cache
+`origin/main` ainda aponta para `40272d03188dc14accdb8c63b65b8763435de7de`; o push
+falhou porque `github.com:22` expirou, SSH-over-443 também expirou e `gh auth status`
+reportou token salvo inválido. Uma consulta direta ao ref remoto expirou, então o SHA
+remoto atual é desconhecido. O SSH da VPS `orquestra@2.25.101.96` também expirou; o
+HEAD e a limpeza de `/opt/orquestra` não foram verificados nesta etapa. Nenhum deploy,
+migration ou alteração remota foi executado. Ver o handoff
+[`2026-11-10-tentativa-sincronizacao.md`](../handoff/2026-11-10-tentativa-sincronizacao.md)
+antes de retomar a publicação.
