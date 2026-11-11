@@ -1,31 +1,28 @@
 # Desenvolvimento local → GitHub → publicação na VPS
 
-Atualizado em 06/11/2026. A pasta local é o ambiente de desenvolvimento;
+Atualizado em 10/11/2026. A pasta local é o ambiente de desenvolvimento;
 GitHub `main` é a fonte compartilhada; `/opt/orquestra` é o checkout de publicação.
 Não editar código diretamente na VPS nem sincronizar mudanças dela de volta.
 
 ## Estado publicado
 
-O release da aplicação usa o commit completo
-`edccf4617181a4b58ff81bd3c809887e10355712`. API, worker e scheduler usam a mesma
-imagem etiquetada com esse SHA. Este handoff e as correções documentais serão
-publicados em commit posterior somente de documentação; após sincronizar o checkout
-da VPS, o `HEAD` do repositório poderá estar nesse commit posterior, enquanto as
-imagens continuarão corretamente identificadas com o SHA do release da aplicação.
-O checkout remoto deve permanecer limpo. A revisão Alembic é
-`0007_search_connection`; não houve alteração do schema da aplicação.
+O release atual da aplicação é `1f7d1a8333518f0b41d96d72676fd78cd759a8cb`. No deploy,
+API, worker e scheduler usaram a imagem `sha256:b5f29fd5617464b2efc9f92e6d73f5089bec75563c0fcef379f2f6bb4caee910`
+com label do SHA. A API respondeu no healthcheck, o painel retornou HTTP 200 e o
+worker respondeu ao ping do Celery. A revisão Alembic permaneceu
+`0010_wame_api_base_url`; não houve migration.
 
-O deploy foi autorizado, conferido e executado em 06/11/2026. O recibo privado é
-`~/orchestra-releases/20261106T024352Z/receipt.json`. O backup operacional
-criptografado foi criado sob `~/orchestra-preservacao/.../operational-backups`;
-confirme a cópia externa dos arquivos e checksums e preserve a passphrase em local
-separado. O recibo indica `started_external_checks_pending`, estado do helper que
-exige validação pós-deploy, não falha de build. A checagem HTTPS de saúde foi feita;
-ver o [handoff detalhado](handoff/2026-11-06-publicacao-e-ingestao.md).
+O checkout GitHub/local/VPS foi alinhado no SHA do release. O helper criou recibo
+privado e backup operacional criptografado em 10/11/2026; a existência dos artefatos
+foi verificada, mas cópia off-site e restauração de ensaio não foram confirmadas.
+O recibo terminou em `started_external_checks_pending`, estado esperado do helper.
+Ver o [handoff detalhado](handoff/2026-11-10-publicacao-enrico.md) e o registro
+histórico de 06/11 em [publicação e ingestão](handoff/2026-11-06-publicacao-e-ingestao.md).
 
-O helper de release forçou `OUTBOUND_ENABLED=false` nos contêineres novos. Respostas
-automáticas de saída ficam suspensas até um piloto autorizado e uma configuração
-explícita. Não altere essa variável como parte de uma atualização comum.
+O helper de release forçou `OUTBOUND_ENABLED=false` na API e no worker. Respostas
+automáticas de saída ficam suspensas até autorização específica de piloto e configuração
+explícita. Nenhuma mensagem real foi enviada nesta publicação. Não altere essa variável
+como parte de uma atualização comum.
 
 ## Rotina de desenvolvimento
 
