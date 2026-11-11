@@ -358,8 +358,12 @@ def needs_unverified_visit_handoff(answer,sales=None):
     # neither is a claim that the appointment is booked.
     assertions=[part for part in re.split(r'(?<=[.!?])\s+',str(answer or '')) if '?' not in part]
     assertion=normalize(' '.join(assertions))
-    return bool((facts.get('preferred_date') or facts.get('preferred_time')) and re.search(
-        r'\b(?:nossa equipe|a equipe|nosso tecnico|te esperamos|estaremos ai|pode contar com a equipe|ficou marcado|fechado para)\b.{0,60}\b(?:ira|vai|fara|estara|quinta|amanha|hoje|as?\s+\d{1,2}|confirmado|marcado|fechado)?',assertion))
+    # Escalate only an actual operational commitment. Merely saying that a
+    # request will be forwarded to the team for availability checking is not a
+    # booking confirmation and must not replace the model's contextual reply.
+    commitment = re.search(r'\b(?:te esperamos|estaremos ai|pode contar com a equipe)\b', assertion) or re.search(
+        r'\b(?:nossa equipe|a equipe|nosso tecnico)\b.{0,60}\b(?:ira|vai|fara|estara)\b', assertion)
+    return bool((facts.get('preferred_date') or facts.get('preferred_time')) and commitment)
 
 
 def transition(previous, text):

@@ -857,8 +857,12 @@ def test_ai_interprets_contextual_channel_confirmation_and_never_confirms_visit(
         'phone':'synthetic-contact','normalizedKind':'text','normalizedText':'Claro.'}))
     with runtime.db() as db:revision=db.get(Conversation,'conversation-a').revision
     monkeypatch.setattr(runtime.tasks,'_graph_response',lambda *a:'{"reply":"Perfeito, vou encaminhar a solicitação à equipe para confirmar a disponibilidade.","interpretation":{"channel_confirmation":"use_current","receiver_confirmation":"unknown","receiver_name":null,"next_required_field":"none"}}')
+    def alert_sent(db,instance,ticket):
+        ticket.notification_status='sent'
+        return True
+    monkeypatch.setattr('app.interventions.send_group_alert',alert_sent)
     result=runtime.tasks.respond_to_conversation.run('tenant-a','conversation-a',revision)
-    assert result=='visit_confirmation_pending_human'
+    assert result=='visit_confirmation_requested'
     with runtime.db() as db:
         conversation=db.get(Conversation,'conversation-a');sales=conversation.context_state['sales_context']
         assert sales['channel_phone_status']=='confirmed'
@@ -866,9 +870,18 @@ def test_ai_interprets_contextual_channel_confirmation_and_never_confirms_visit(
         assert not opportunity_ready_for_team(sales)
         ticket=db.query(InterventionRequest).filter_by(tenant_id='tenant-a',conversation_id=conversation.id).one()
         assert ticket.status=='setup_required'
-        notice=db.query(OutboxMessage).filter_by(tenant_id='tenant-a',conversation_id=conversation.id,author_kind='system').one()
-        assert 'ainda não está confirmada' in notice.content
-        assert notice.content.count('Ibirité')==1
+        reply=db.query(OutboxMessage).filter_by(tenant_id='tenant-a',conversation_id=conversation.id,author_kind='assistant').one()
+        assert reply.content=='Perfeito, vou encaminhar a solicitação à equipe para confirmar a disponibilidade.'
+        assert 'está confirmada' not in reply.content
+        reply_id=reply.id
+        assert conversation.status=='human'
+    monkeypatch.setattr('app.zapi_client.ZapiClient.send_text',lambda *args:{'messageId':'synthetic-visit-followup'})
+    assert runtime.outbox.dispatch(reply_id)=='accepted'
+    with runtime.db() as db:
+        from app.models import Message
+        sent=db.query(Message).filter_by(tenant_id='tenant-a',conversation_id='conversation-a',external_id='synthetic-visit-followup').one()
+        assert sent.author_kind=='assistant'
+        assert sent.content=='Perfeito, vou encaminhar a solicitação à equipe para confirmar a disponibilidade.'
 
 
 def test_core_build_context_backfills_structured_facts_for_existing_conversation(runtime,monkeypatch):

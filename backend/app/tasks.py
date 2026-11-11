@@ -346,7 +346,7 @@ def _escalate_after_automation_failure(db,tenant_id,conversation_id,revision,rea
         return 'intervention_requested'
 
 
-def _request_visit_confirmation(db,tenant_id,conversation_id,revision):
+def _request_visit_confirmation(db,tenant_id,conversation_id,revision,customer_reply=None):
     from app.models import ZapiInstance
     from app.interventions import create_request,send_group_alert
     with tenant_guard(tenant_id):
@@ -372,7 +372,10 @@ def _request_visit_confirmation(db,tenant_id,conversation_id,revision):
         if notified:notice=f'Registrei sua preferência de visita{details}. A visita ainda não está confirmada; enviei um pedido para a equipe verificar a disponibilidade.'
         else:notice=f'Registrei sua preferência de visita{details}. A visita ainda não está confirmada e não consegui enviar o alerta automaticamente. A solicitação ficou disponível para revisão humana no painel.'
         from app.outbox import enqueue
-        enqueue(db,instance,conversation,notice,idempotency_key=f'visit-confirmation:{ticket.id}',author_kind='system')
+        outgoing=customer_reply if notified and customer_reply else notice
+        author_kind='assistant' if notified and customer_reply else 'system'
+        enqueue(db,instance,conversation,outgoing,parts=split_reply_conversational(outgoing),
+            delivery_config={'delay':2,'presence':False},idempotency_key=f'visit-confirmation:{ticket.id}',author_kind=author_kind)
         return 'visit_confirmation_requested' if notified else 'visit_confirmation_pending_human'
 
 
@@ -418,8 +421,6 @@ def respond_to_conversation(tenant_id, conversation_id, expected_revision):
             # Never hold the tenant policy lock over inference/embedding calls.
             instructions, history = _build_context(db, agent, conversation, configs, expected_revision)
             sales_context=(conversation.context_state or {}).get('sales_context') or {} if profile.visit_booking_enabled else {}
-            if profile.visit_booking_enabled and opportunity_ready_for_team(sales_context):
-                return _request_visit_confirmation(db,tenant_id,conversation_id,expected_revision)
             answer = _graph_response(db, agent, conversation, instructions, history,
                                      f'tenant:{tenant_id}:conversation:{conversation_id}', expected_revision)
             interpretation={}
@@ -440,18 +441,17 @@ def respond_to_conversation(tenant_id, conversation_id, expected_revision):
                             current.context_state={**(current.context_state or {}),'sales_context':updated}
                             current.context_expires_at=datetime.now(timezone.utc)+timedelta(minutes=profile.context_minutes)
                             db.commit();sales_context=updated
-                    if opportunity_ready_for_team(sales_context):
-                        return _request_visit_confirmation(db,tenant_id,conversation_id,expected_revision)
             turn=db.query(ConversationTurn).filter_by(tenant_id=tenant_id,conversation_id=conversation_id,revision=expected_revision).first() if profile.enabled else None
             if profile.enabled:answer=output_guard(answer,turn.state if turn else {})
             if needs_unverified_visit_handoff(answer or '',sales_context):
                 if profile.visit_booking_enabled:
-                    if opportunity_ready_for_team(sales_context):return _request_visit_confirmation(db,tenant_id,conversation_id,expected_revision)
                     return _escalate_after_automation_failure(db,tenant_id,conversation_id,expected_revision,'tentativa de confirmar visita sem evidência operacional')
                 else:
                     return _escalate_after_automation_failure(db,tenant_id,conversation_id,expected_revision,'tentativa de afirmar agendamento sem capacidade operacional configurada')
             if not answer or (not profile.enabled and len(answer)>4000):
                 return _escalate_after_automation_failure(db,tenant_id,conversation_id,expected_revision,'resposta vazia ou inválida da automação')
+            if profile.visit_booking_enabled and opportunity_ready_for_team(sales_context):
+                return _request_visit_confirmation(db,tenant_id,conversation_id,expected_revision,customer_reply=answer)
             with tenant_guard(tenant_id):
                 db.expire_all()
                 conversation = db.query(Conversation).filter_by(id=conversation_id, tenant_id=tenant_id).first()

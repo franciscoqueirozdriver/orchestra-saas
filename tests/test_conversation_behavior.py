@@ -99,6 +99,8 @@ def test_appointment_preference_is_never_a_confirmed_booking_and_phone_is_redact
     assert not needs_unverified_visit_handoff('A visita ainda não está confirmada; falta validar.',state)
     assert not needs_unverified_visit_handoff('A visita ainda aguarda confirmação da equipe.',state)
     assert not needs_unverified_visit_handoff('A preferência ficou registrada. Será você quem vai receber a equipe amanhã?',state)
+    assert not needs_unverified_visit_handoff('Vou encaminhar sua solicitação à equipe para confirmar a disponibilidade.',state)
+    assert needs_unverified_visit_handoff('Nossa equipe fará a visita amanhã às 10h.',state)
     assert '98426-5506' not in redact_contact_numbers('Telefone 31 98426-5506')
 
 
