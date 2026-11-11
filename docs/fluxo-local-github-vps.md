@@ -6,12 +6,15 @@ Não editar código diretamente na VPS nem sincronizar mudanças dela de volta.
 
 ## Estado publicado
 
-O release atual da aplicação é `cf2ed7830c03337212c0d927f5a1f93cf9034630`. API,
-worker e scheduler usam a imagem `sha256:6bd1e808f421ace6ab02591aa97dd3e0d8dc89fcd019d740ab141d10af65f600`
-com label desse SHA. A API e o painel responderam por HTTPS (`/health` OK e página
-principal HTTP 200), serviços ficaram saudáveis e o worker respondeu ao ping do Celery.
-A revisão Alembic permaneceu `0010_wame_api_base_url`; não houve migration. A saída
-automática ficou explicitamente desativada em API, worker e scheduler.
+Na publicação de 11/11/2026, o helper sincronizou o código e depois a atualização do
+handoff/documentação. Em cada etapa API, worker e scheduler usaram uma imagem comum
+rotulada com o SHA integral alvo. API e painel responderam por HTTPS (`/health` OK e
+página principal HTTP 200), serviços ficaram saudáveis e o worker respondeu ao ping do
+Celery. A revisão Alembic permaneceu `0010_wame_api_base_url`; não houve migration. A
+saída automática ficou explicitamente desativada em API, worker e scheduler. Para
+conferir o SHA vigente, compare o `HEAD` local/GitHub/VPS e o label
+`org.opencontainers.image.revision` das imagens; não reutilize o SHA de um handoff
+posterior como se ainda fosse atual.
 
 O checkout GitHub/local/VPS foi alinhado no SHA do release. O helper criou recibo
 privado e backup operacional criptografado em 11/11/2026; cópia off-site e

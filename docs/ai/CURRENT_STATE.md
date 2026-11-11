@@ -21,15 +21,16 @@ falso positivo da proteção contra promessas de agendamento. O commit foi envia
 última evidência disponível. Respostas do modelo e alerta foram simulados nos testes,
 sem chamadas reais a LLM ou WhatsApp.
 
-**Publicação em 11/11/2026:** `main` local, `origin/main`, checkout `/opt/orquestra` e
-imagens de API/worker/scheduler foram confirmados em
-`cf2ed7830c03337212c0d927f5a1f93cf9034630`. API, worker, scheduler, Redis e banco
-estavam saudáveis; worker respondeu ao ping. `/health` retornou `{"ok":true}` e o
-painel respondeu HTTP 200. O banco permaneceu em `0010_wame_api_base_url`, sem
-migration. `OUTBOUND_ENABLED=false` foi confirmado em API, worker e scheduler. O
-helper criou backup criptografado; cópia off-site e ensaio de restauração não foram
-confirmados. Nenhuma mensagem WhatsApp foi enviada. Registro detalhado no handoff de
-11/11.
+**Publicação em 11/11/2026:** os commits de implementação `929561e` e `34168c0` foram
+publicados; o checkout e as imagens foram sincronizados novamente após o handoff
+documentar o release. Em cada execução, API, worker e scheduler usaram a mesma imagem,
+healthchecks passaram, o worker respondeu ao ping, `/health` retornou `{"ok":true}` e
+o painel respondeu HTTP 200. O banco permaneceu em `0010_wame_api_base_url`, sem
+migration. `OUTBOUND_ENABLED=false` foi conferido em API, worker e scheduler. O helper
+criou backups criptografados; cópia off-site e ensaio de restauração não foram
+confirmados. Nenhuma mensagem WhatsApp foi enviada. Para o SHA atual, compare o
+`HEAD` local, `origin/main`, `/opt/orquestra` e o label de revisão das imagens; os
+relatórios abaixo guardam os SHAs verificados em cada etapa.
 
 Esta página é um snapshot do checkout, não um atestado de produção. “Implementado”
 significa que o código correspondente existe; não implica execução, CI verde ou
@@ -59,7 +60,7 @@ homologação de fornecedor.
 | Grupo de atendimento | Implementado no código; homologação pendente | `interventions.py`, `routes_zapi.py`, migration `0009`, `docs/intervencao-humana-grupo.md` | Envio de teste é externo e real; estado `validated` é confirmação organizacional, não confirmação de leitura fornecida pela API |
 | Conversas importadas como base de busca | Não automático; fluxos separados | histórico em `messages`; conhecimento indexado em `knowledge_documents/chunks` | Não assumir que histórico foi indexado ou que conversa histórica virou regra |
 | Envio humanizado em blocos | Implementado e publicado em `1f7d1a8`; envio externo segue globalmente desativado | `split_reply_conversational`, `tasks.py`, outbox existente; resposta curta fica inteira, respostas maiores podem virar até 3 blocos de 300 caracteres, intervalo de 2 s; humanização é regra global, não configuração individual | Homologação com fornecedores/clientes não feita; chamada externa iniciada não é cancelável; excesso sobre o limite seguro escala para intervenção; `OUTBOUND_ENABLED=false` nos containers publicados |
-| Continuidade conversacional e visita técnica | Interpretação contextual implementada e publicada em `main` (`cf2ed78`); confirmação operacional de visita permanece humana | `Conversation.context_state`, `ConversationProfile.visit_booking_enabled` (falso por padrão), `conversation/behavior.py`, `tasks.py`, `interventions.py`; sem migration | Provedor real ainda não foi homologado. O modelo recebe contexto montado pelo backend, não acessa SQL diretamente. Saída incompatível falha fechada para intervenção. Envio automático permaneceu desativado no release |
+| Continuidade conversacional e visita técnica | Interpretação contextual implementada e publicada em `main`; confirmação operacional de visita permanece humana | `Conversation.context_state`, `ConversationProfile.visit_booking_enabled` (falso por padrão), `conversation/behavior.py`, `tasks.py`, `interventions.py`; sem migration | Provedor real ainda não foi homologado. O modelo recebe contexto montado pelo backend, não acessa SQL diretamente. Saída incompatível falha fechada para intervenção. Envio automático permaneceu desativado no release |
 | Integração com Instagram, billing SaaS, ferramentas MCP/CRM/agenda, multiagente | Planejado ou não verificado | `TODO.md`, `docs/intencoes/`, documentação de contratação | Documentação/proposta não demonstra implementação |
 
 ## Banco e migrations
