@@ -38,7 +38,7 @@ def test_profile_changes_style_not_facts_or_permissions():
 
 def test_context_carries_sales_facts_and_uses_direct_whatsapp_confirmation():
     from datetime import datetime,timezone
-    from app.conversation.behavior import merge_sales_context,next_opportunity_question,opportunity_ready_for_team
+    from app.conversation.behavior import merge_sales_context,sales_context_instructions,apply_sales_interpretation,opportunity_ready_for_team
     now=datetime.now(timezone.utc)
     state=merge_sales_context({},'Orçamento de climatização para uma igreja pequena em Betim.',message_id='m1',captured_at=now,provider_phone='5531999999999')
     state=merge_sales_context(state,'Av. Amazonas, 1270. Centro',message_id='m2',captured_at=now)
@@ -48,40 +48,44 @@ def test_context_carries_sales_facts_and_uses_direct_whatsapp_confirmation():
     assert state['channel_phone_status']=='unconfirmed'
     assert not opportunity_ready_for_team(state)
     state['receiver_status']='customer_confirmed'
-    assert next_opportunity_question(state)=='Podemos usar este mesmo WhatsApp para nossa equipe entrar em contato?'
-    state=merge_sales_context(state,'Sim, pode usar.',message_id='m4',captured_at=now,last_assistant_text='Podemos usar este mesmo WhatsApp para nossa equipe entrar em contato?')
+    state['channel_phone_question_asked']=True
+    assert 'return_channel_confirmation' in sales_context_instructions(state)
+    state=merge_sales_context(state,'Claro.',message_id='m4',captured_at=now,last_assistant_text='Podemos usar este mesmo WhatsApp para nossa equipe entrar em contato?')
+    assert state['channel_phone_status']=='unconfirmed'
+    state=apply_sales_interpretation(state,{'channel_confirmation':'use_current'},message_id='m4',captured_at=now)
     assert state['channel_phone_status']=='confirmed'
 
 
 def test_ambiguous_date_options_are_not_silently_collapsed():
     from datetime import datetime,timezone
-    from app.conversation.behavior import merge_sales_context,next_opportunity_question
+    from app.conversation.behavior import merge_sales_context,sales_context_instructions
     now=datetime.now(timezone.utc)
     state=merge_sales_context({},'Pode ser amanhã ou quinta.',message_id='m1',captured_at=now)
     state['facts'].update({'city':{'value':'Betim'},'address':{'value':'Rua Sintética, 1'}})
     assert state['facts']['preferred_date']['value'].lower()=='amanhã ou quinta'
-    assert next_opportunity_question(state)=='Entre amanhã ou quinta, qual opção você prefere?'
+    assert 'preferred_date' in sales_context_instructions(state)
     state=merge_sales_context({},'Pode ser na próxima quinta-feira, pela manhã.',message_id='m2',captured_at=now)
     assert state['facts']['preferred_date']['value'].lower()=='na próxima quinta-feira'
 
 
 def test_other_visit_receiver_requires_name_without_inventing_interlocutor():
     from datetime import datetime,timezone
-    from app.conversation.behavior import merge_sales_context,next_opportunity_question,sales_context_instructions
+    from app.conversation.behavior import merge_sales_context,sales_context_instructions,apply_sales_interpretation
     now=datetime.now(timezone.utc)
-    state={'facts':{'city':{'value':'Betim'},'address':{'value':'Rua Sintética, 1'},'preferred_date':{'value':'amanhã'},'preferred_time':{'value':'10:00'}},'channel_phone_status':'confirmed','receiver_status':'unknown','appointment_status':'visit_requested'}
+    state={'facts':{'city':{'value':'Betim'},'address':{'value':'Rua Sintética, 1'},'preferred_date':{'value':'amanhã'},'preferred_time':{'value':'10:00'}},'channel_phone_status':'confirmed','receiver_status':'unknown','receiver_question_asked':True,'appointment_status':'visit_requested'}
     state=merge_sales_context(state,'Não, minha irmã receberá.',message_id='m1',captured_at=now,last_assistant_text='Será você mesmo quem vai receber nossa equipe no local?')
+    assert state['receiver_status']=='unknown'
+    state=apply_sales_interpretation(state,{'receiver_confirmation':'other_person','next_required_field':'receiver_name'},message_id='m1',captured_at=now)
     assert state['receiver_status']=='other_person_needed'
-    assert next_opportunity_question(state).startswith('Qual é o primeiro nome')
     state['receiver_name_question_asked']=True
-    state=merge_sales_context(state,'Ana Souza',message_id='m2',captured_at=now,last_assistant_text='Qual é o primeiro nome da pessoa que estará no local para receber a equipe?')
+    state=apply_sales_interpretation(state,{'receiver_name':'Ana Souza'},message_id='m2',captured_at=now)
     assert state['receiver_status']=='other_person_confirmed'
     assert state['facts']['receiver_name']['value']=='Ana Souza'
     assert 'Ana Souza' in sales_context_instructions(state)
     assert 'Francisco' not in sales_context_instructions(state)
     state=merge_sales_context({'receiver_status':'other_person_needed'},'Minha irmã Ana Souza',message_id='m3',captured_at=now,
-                              last_assistant_text='Qual é o primeiro nome da pessoa que estará no local para receber a equipe?')
-    assert state['facts']['receiver_name']['value']=='Ana Souza'
+                              last_assistant_text='Qual nome devo informar?')
+    assert state['receiver_status']=='other_person_needed'
     state=merge_sales_context({},'Eu mesmo, Francisco',message_id='m4',captured_at=now)
     assert state['facts']['interlocutor_name']['value']=='Francisco'
 
@@ -94,6 +98,7 @@ def test_appointment_preference_is_never_a_confirmed_booking_and_phone_is_redact
     assert needs_unverified_visit_handoff('Combinado, estaremos aí na quinta.',state)
     assert not needs_unverified_visit_handoff('A visita ainda não está confirmada; falta validar.',state)
     assert not needs_unverified_visit_handoff('A visita ainda aguarda confirmação da equipe.',state)
+    assert not needs_unverified_visit_handoff('A preferência ficou registrada. Será você quem vai receber a equipe amanhã?',state)
     assert '98426-5506' not in redact_contact_numbers('Telefone 31 98426-5506')
 
 
@@ -136,6 +141,20 @@ def test_indivisible_long_item_is_refused_instead_of_truncated():
 def test_humanized_reply_keeps_short_answer_as_one_part():
     text='Olá! Posso ajudar com isso.'
     assert split_reply_conversational(text)==[text]
+
+
+def test_visit_response_requires_model_semantics_and_rejects_untrusted_transitions():
+    from app.conversation.behavior import parse_visit_response,apply_sales_interpretation
+    now=datetime.now(timezone.utc)
+    sales={'channel_phone_status':'unconfirmed','channel_phone_question_asked':True,'receiver_status':'unknown','receiver_question_asked':False}
+    reply,updates=parse_visit_response('{"reply":"Certo, vou encaminhar sua preferência.","interpretation":{"channel_confirmation":"use_current","receiver_confirmation":"customer","receiver_name":"Xico123","next_required_field":"none"}}')
+    assert reply=='Certo, vou encaminhar sua preferência.'
+    assert updates=={'channel_confirmation':'use_current','receiver_confirmation':'customer','next_required_field':'none'}
+    updated=apply_sales_interpretation(sales,updates,message_id='m1',captured_at=now)
+    assert updated['channel_phone_status']=='confirmed'
+    assert updated['receiver_status']=='unknown'  # no pending receiver question, so model cannot assert consent
+    assert parse_visit_response('Resposta antiga sem envelope')==('',None)
+    assert parse_visit_response('{resposta incompleta')==('',None)
 
 
 def test_humanized_reply_groups_sentences_and_preserves_all_content():

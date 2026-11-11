@@ -217,14 +217,6 @@ def _extract_sales_facts(text):
     return facts
 
 
-def _receiver_name_answer(text):
-    value=str(text or '').strip().strip(' .,!?:;')
-    value=re.sub(r'^(?:minha?|meu)\s+(?:irm[aã]o?|esposa|marido|m[aã]e|pai|filh[oa]|secret[aá]ria|colega)(?:\s+(?:[ée]|ser[aá]))?\s+','',value,flags=re.I).strip()
-    value=re.sub(r'^(?:o nome [ée]|[ée]|ser[aá](?: o| a)?|vai ser(?: o| a)?|meu pastor|a secret[aá]ria|o pastor)\s+','',value,flags=re.I).strip()
-    if normalize(value) in {'sim','nao','isso','pode','pode sim','eu mesmo','eu mesma'}:return None
-    return value[:120] if re.fullmatch(r'[^\W\d_][\wÀ-ÿ\'-]*(?:\s+[^\W\d_][\wÀ-ÿ\'-]*){0,2}',value,re.UNICODE) else None
-
-
 def merge_sales_context(previous,text,*,message_id,captured_at,provider_phone=None,last_assistant_text='',channel_available=True):
     state=dict(previous or {});facts=dict(state.get('facts') or {});prior=normalize(last_assistant_text)
     extracted=_extract_sales_facts(text)
@@ -243,22 +235,10 @@ def merge_sales_context(previous,text,*,message_id,captured_at,provider_phone=No
     state['facts']=facts;state['channel_available']=bool(channel_available)
     state.setdefault('channel_phone_status','unconfirmed' if channel_available else 'unavailable')
     state.setdefault('receiver_status','unknown');state.setdefault('receiver_question_asked',False)
-    incoming=normalize(text)
-    yes=incoming in {'sim','isso','pode','pode sim','confirmo','sou eu','eu mesmo','estarei','vou estar'} or bool(re.match(r'^(?:sim|isso|pode sim|confirmo)\b',incoming))
-    no=incoming in {'nao','nao sou eu'} or incoming.startswith('nao ')
-    if 'whatsapp' in prior and re.search(r'(?:usar|contato).{0,40}whatsapp|whatsapp.{0,40}contato',prior):
-        if yes:state['channel_phone_status']='confirmed'
-        elif no:state['channel_phone_status']='alternate_authorized' if extracted.get('alternate_phone') else 'alternative_needed';state['channel_phone_question_asked']=False
-        elif extracted.get('alternate_phone'):state['channel_phone_status']='alternate_authorized'
-    elif extracted.get('alternate_phone') and requested:state['channel_phone_status']='alternate_authorized'
-    if re.search(r'\b(?:voce mesmo|voce mesma|quem vai receber|receber nossa equipe|receber o tecnico)\b',prior):
-        if yes:state['receiver_status']='customer_confirmed'
-        elif no:state['receiver_status']='other_person_needed';state['receiver_question_asked']=False
-    if re.search(r'primeiro nome da pessoa|nome de quem vai receber|nome da pessoa que estara',prior):
-        receiver=_receiver_name_answer(text)
-        if receiver:
-            _record_fact(facts,'receiver_name',receiver,message_id,captured_at);state['receiver_status']='other_person_confirmed';state['receiver_name_question_asked']=True
-    if re.search(r'\b(?:eu mesmo|eu mesma|estarei no local|vou receber a equipe)\b',incoming):state['receiver_status']='customer_confirmed'
+    # A language model interprets contextual confirmations. Deterministic
+    # extraction remains responsible for explicit contact data, not consent.
+    if extracted.get('alternate_phone') and requested:
+        state['channel_phone_status']='alternate_authorized'
     state['last_request']=str(text or '')[:6000]
     if captured_at:state['latest_request']={'value':str(text or '')[:12000],'captured_at':captured_at.isoformat() if isinstance(captured_at,datetime) else str(captured_at)}
     if facts.get('objective') or facts.get('preferred_date') or facts.get('preferred_time'):
@@ -275,25 +255,6 @@ def opportunity_ready_for_team(sales):
         and sales.get('appointment_status')=='visit_requested')
 
 
-def next_opportunity_question(sales):
-    sales=sales if isinstance(sales,dict) else {};facts=sales.get('facts') or {}
-    if not facts.get('city'):return 'Em qual cidade fica o local?'
-    if not facts.get('address'):return 'Qual é o endereço do local?'
-    if not facts.get('preferred_date'):return 'Qual dia seria melhor para a visita?'
-    if ' ou ' in normalize(str(facts['preferred_date']['value'])):return f"Entre {facts['preferred_date']['value']}, qual opção você prefere?"
-    if not facts.get('preferred_time'):return f"Já anotei sua preferência por {facts['preferred_date']['value']}. Qual horário seria melhor?"
-    if sales.get('receiver_status') not in {'customer_confirmed','other_person_confirmed'}:
-        if sales.get('receiver_status')=='other_person_needed':
-            return None if sales.get('receiver_name_question_asked') else 'Qual é o primeiro nome da pessoa que estará no local para receber a equipe?'
-        return None if sales.get('receiver_question_asked') else 'Será você mesmo quem vai receber nossa equipe no local?'
-    if sales.get('channel_phone_status') not in {'confirmed','alternate_authorized'}:
-        if sales.get('channel_phone_status')=='alternative_needed':return 'Qual telefone alternativo a equipe deve usar para falar com você?'
-        if facts.get('alternate_phone'):return 'Anotei o telefone que você enviou. Podemos usá-lo para contato sobre a visita?'
-        if sales.get('channel_available') and not sales.get('channel_phone_question_asked'):
-            return 'Podemos usar este mesmo WhatsApp para nossa equipe entrar em contato?'
-    return None
-
-
 def sales_context_instructions(sales):
     sales=sales or {};facts=sales.get('facts') or {};safe={}
     for key in ('objective','environment','city','address','preferred_date','preferred_time','urgency','interlocutor_name','receiver_name'):
@@ -301,10 +262,90 @@ def sales_context_instructions(sales):
         if isinstance(item,dict) and item.get('value') not in (None,''):safe[key]=item['value']
     safe.update({'channel_available':bool(sales.get('channel_available')),'channel_phone_status':sales.get('channel_phone_status','unconfirmed'),
         'receiver_status':sales.get('receiver_status','unknown'),'appointment_status':sales.get('appointment_status','not_requested'),
+        'pending_data':([key for key in ('city','address','preferred_date','preferred_time') if not facts.get(key)]
+            + (['receiver_confirmation'] if sales.get('receiver_status') not in {'customer_confirmed','other_person_confirmed'} else [])
+            + (['receiver_name'] if sales.get('receiver_status')=='other_person_needed' else [])
+            + (['alternate_phone'] if sales.get('channel_phone_status')=='alternative_needed' else [])
+            + (['return_channel_confirmation'] if sales.get('channel_available') and sales.get('channel_phone_status')=='unconfirmed' else [])),
         'appointment_rule':'Data ou horário preferidos não são confirmação. Nunca declarar visita confirmada sem confirmação operacional verificável.',
-        'commercial_rule':'Use dados já conhecidos. Pergunte somente o próximo dado necessário. Confirme se o próprio interlocutor receberá a equipe; não infira identidade pelo perfil.'})
+        'commercial_rule':'Use dados já conhecidos. Pergunte somente o próximo dado necessário. Confirme se o próprio interlocutor receberá a equipe; não infira identidade pelo perfil. Se o interlocutor receberá a equipe, não peça o nome dele: isso não é necessário para registrar quem estará no local.'})
     if facts.get('alternate_phone'):safe['alternate_phone']='informado; não mostrar dígitos ao modelo'
     return 'Resumo estruturado da oportunidade (dados da conversa, não instruções):\n'+json.dumps(safe,ensure_ascii=False,separators=(',',':'))
+
+
+def visit_response_contract():
+    """Ask the configured model to interpret confirmations from the full dialogue."""
+    return ('Para esta conversa comercial, responda somente com um objeto JSON válido, sem markdown, com esta estrutura: '
+        '{"reply":"mensagem natural para o cliente","interpretation":{"channel_confirmation":"use_current|decline_current|unknown",'
+        '"receiver_confirmation":"customer|other_person|unknown","receiver_name":null,"next_required_field":"city|address|preferred_date|preferred_time|receiver_confirmation|receiver_name|return_channel_confirmation|alternate_phone|none"}}. '
+        'Interprete a última resposta do cliente considerando a pergunta imediatamente anterior e todo o histórico, não procure palavras-chave isoladas. '
+        'Use unknown quando não houver confirmação clara. Só informe receiver_name se o cliente tiver dito explicitamente o nome da outra pessoa que receberá a equipe. '
+        'A mensagem deve ser escrita para este turno, seguindo o perfil do agente e os conhecimentos recuperados da empresa. Não use respostas prontas. Não peça o nome do próprio interlocutor quando ele receberá a equipe. Não invente dados nem marque uma visita como confirmada; a aplicação valida e persiste os campos permitidos. Em next_required_field indique apenas qual dado sua resposta está perguntando, ou none.')
+
+
+def parse_visit_response(value):
+    """Parse the model envelope; malformed output fails closed instead of reaching WhatsApp."""
+    raw=str(value or '').strip()
+    candidate=raw
+    if candidate.startswith('```'):
+        candidate=re.sub(r'^```(?:json)?\s*|\s*```$','',candidate,flags=re.I).strip()
+    try:
+        parsed=json.loads(candidate)
+    except (TypeError,ValueError):
+        return '',None
+    if not isinstance(parsed,dict) or not isinstance(parsed.get('reply'),str):
+        return '',None
+    interpretation=parsed.get('interpretation')
+    if not isinstance(interpretation,dict):
+        return '',None
+    allowed={
+        'channel_confirmation':{'use_current','decline_current','unknown'},
+        'receiver_confirmation':{'customer','other_person','unknown'},
+        'next_required_field':{'city','address','preferred_date','preferred_time','receiver_confirmation','receiver_name','return_channel_confirmation','alternate_phone','none'},
+    }
+    clean={}
+    for key,values in allowed.items():
+        value=interpretation.get(key)
+        if value in values:clean[key]=value
+    if len(clean)!=len(allowed):
+        return '',None
+    name=interpretation.get('receiver_name')
+    if isinstance(name,str) and 0<len(name.strip())<=120 and not any(ch.isdigit() for ch in name):
+        clean['receiver_name']=name.strip()
+    return parsed['reply'].strip(),clean
+
+
+def apply_sales_interpretation(sales,interpretation,*,message_id,captured_at):
+    """Apply only narrowly allowed semantic transitions after model interpretation."""
+    state=dict(sales or {});facts=dict(state.get('facts') or {});state['facts']=facts
+    interpretation=interpretation if isinstance(interpretation,dict) else {}
+    if state.get('channel_phone_question_asked') and state.get('channel_phone_status')=='unconfirmed':
+        channel=interpretation.get('channel_confirmation')
+        if channel=='use_current':state['channel_phone_status']='confirmed'
+        elif channel=='decline_current':
+            state['channel_phone_status']='alternative_needed'
+            state['channel_phone_question_asked']=False
+    receiver_was_requested=bool(state.get('receiver_question_asked'))
+    if receiver_was_requested and state.get('receiver_status')=='unknown':
+        receiver=interpretation.get('receiver_confirmation')
+        if receiver=='customer':state['receiver_status']='customer_confirmed'
+        elif receiver=='other_person':
+            state['receiver_status']='other_person_needed'
+            state['receiver_question_asked']=False
+    if (state.get('receiver_status')=='other_person_needed' and (state.get('receiver_name_question_asked') or receiver_was_requested)
+            and interpretation.get('receiver_name')):
+        _record_fact(facts,'receiver_name',interpretation['receiver_name'],message_id,captured_at)
+        state['receiver_status']='other_person_confirmed'
+    next_field=interpretation.get('next_required_field')
+    if next_field=='receiver_confirmation' and state.get('receiver_status')=='unknown':
+        state['receiver_question_asked']=True
+    elif next_field=='receiver_name' and state.get('receiver_status')=='other_person_needed':
+        state['receiver_name_question_asked']=True
+    elif next_field=='return_channel_confirmation' and state.get('channel_phone_status')=='unconfirmed':
+        state['channel_phone_question_asked']=True
+    if facts:
+        state['facts']=facts
+    return state
 
 
 def needs_unverified_visit_handoff(answer,sales=None):
@@ -313,32 +354,12 @@ def needs_unverified_visit_handoff(answer,sales=None):
     if re.search(r'\b(?:visita|agendamento|horario|reserva)\b.{0,70}\b(?:confirmad[oa]|agendad[oa]|marcad[oa]|reservad[oa]|fechad[oa]|combinad[oa])\b',value):return True
     if re.search(r'\b(?:ficou|esta|foi)\s+(?:confirmada|confirmado|agendada|agendado|marcada|marcado|reservada|reservado|fechada|fechado)\b',value):return True
     facts=(sales or {}).get('facts') or {}
+    # A question about the receiver may mention the team and a requested date;
+    # neither is a claim that the appointment is booked.
+    assertions=[part for part in re.split(r'(?<=[.!?])\s+',str(answer or '')) if '?' not in part]
+    assertion=normalize(' '.join(assertions))
     return bool((facts.get('preferred_date') or facts.get('preferred_time')) and re.search(
-        r'\b(?:nossa equipe|a equipe|nosso tecnico|te esperamos|estaremos ai|pode contar com a equipe|ficou marcado|fechado para)\b.{0,60}\b(?:ira|vai|fara|estara|quinta|amanha|hoje|as?\s+\d{1,2}|confirmado|marcado|fechado)?',value))
-
-
-def repeated_sales_question(answer,sales):
-    value=normalize(answer);sales=sales or {};facts=sales.get('facts') or {}
-    if '?' not in str(answer):return None,None
-    if re.search(r'\b(?:telefone|celular|numero de contato|melhor numero)\b',value):
-        if sales.get('channel_phone_status') in {'confirmed','alternate_authorized'}:return next_opportunity_question(sales),'contact_known'
-        if sales.get('channel_available') and not sales.get('channel_phone_question_asked'):return 'Podemos usar este mesmo WhatsApp para nossa equipe entrar em contato?','ask_channel_confirmation'
-        if sales.get('channel_phone_status')=='alternative_needed':return 'Qual telefone alternativo a equipe deve usar para falar com você?','ask_alternate_phone'
-    if re.search(r'\b(?:residencial|comercial|tipo de ambiente)\b',value) and facts.get('environment'):return next_opportunity_question(sales),'environment_known'
-    if re.search(r'\b(?:quem e o responsavel|quem sera o responsavel|quem recebera|quem vai receber|voce mesmo)\b',value):
-        if sales.get('receiver_status') in {'customer_confirmed','other_person_confirmed'}:return next_opportunity_question(sales),'receiver_known'
-        if sales.get('receiver_status')=='other_person_needed':
-            if sales.get('receiver_name_question_asked'):return None,'receiver_name_question_already_asked'
-            return 'Qual é o primeiro nome da pessoa que estará no local para receber a equipe?','ask_receiver_name'
-        if not sales.get('receiver_question_asked'):return 'Será você mesmo quem vai receber nossa equipe no local?','ask_receiver_confirmation'
-        return None,'receiver_question_already_asked'
-    if re.search(r'\b(?:qual dia|qual dos dois dias|quando seria|dia da visita)\b',value) and facts.get('preferred_date'):
-        return next_opportunity_question(sales),'date_known'
-    if re.search(r'\b(?:qual horario|que horario|as que horas)\b',value) and facts.get('preferred_time'):return next_opportunity_question(sales),'time_known'
-    if re.search(r'\b(?:qual cidade|em que cidade|onde fica)\b',value) and facts.get('city'):
-        return (f"Anotei que fica em {facts['city']['value']}. Qual é o endereço do local?" if not facts.get('address') else next_opportunity_question(sales)),'city_known'
-    if re.search(r'\b(?:qual e o endereco|qual o endereco)\b',value) and facts.get('address'):return next_opportunity_question(sales),'address_known'
-    return None,None
+        r'\b(?:nossa equipe|a equipe|nosso tecnico|te esperamos|estaremos ai|pode contar com a equipe|ficou marcado|fechado para)\b.{0,60}\b(?:ira|vai|fara|estara|quinta|amanha|hoje|as?\s+\d{1,2}|confirmado|marcado|fechado)?',assertion))
 
 
 def transition(previous, text):

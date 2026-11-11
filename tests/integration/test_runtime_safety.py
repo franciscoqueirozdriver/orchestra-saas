@@ -793,15 +793,19 @@ def test_core_visit_continuity_asks_receiver_and_never_confirms_without_operatio
         instructions,history=runtime.tasks._build_context(db,db.get(Agent,'agent-a'),c,[db.get(LLMConfig,'model-a')],revision)
         assert 'igreja' in instructions and 'Betim' in instructions and '31984265506' not in instructions
         assert '31984265506' not in ''.join(m['content'] for m in history)
-    monkeypatch.setattr(runtime.tasks,'_graph_response',lambda *a:'A visita está confirmada para amanhã às 10h. A equipe estará lá!')
+    answers=iter([
+        '{"reply":"A preferência ficou registrada. Será você quem vai receber a equipe no local?","interpretation":{"receiver_confirmation":"unknown","channel_confirmation":"unknown","receiver_name":null,"next_required_field":"receiver_confirmation"}}',
+        '{"reply":"Entendi. Qual é o primeiro nome da pessoa que estará no local?","interpretation":{"receiver_confirmation":"other_person","channel_confirmation":"unknown","receiver_name":null,"next_required_field":"receiver_name"}}',
+        '{"reply":"Obrigado, vou encaminhar a solicitação para confirmação da equipe.","interpretation":{"receiver_confirmation":"unknown","channel_confirmation":"unknown","receiver_name":"Ana Souza","next_required_field":"none"}}',
+    ])
+    monkeypatch.setattr(runtime.tasks,'_graph_response',lambda *a:next(answers))
     assert runtime.tasks.respond_to_conversation.run('tenant-a','conversation-a',revision)=='reply_queued'
     with runtime.db() as db:
         c=db.get(Conversation,'conversation-a');sales=c.context_state['sales_context']
         reply=db.query(OutboxMessage).filter_by(tenant_id='tenant-a',conversation_id='conversation-a',status='pending').one()
         assert sales['receiver_question_asked'] is True
-        assert 'não está confirmada' in reply.content
-        assert 'Será você mesmo quem vai receber' in reply.content
-        assert 'visita está confirmada' not in reply.content
+        assert 'Será você quem vai receber' in reply.content
+        assert 'Anotei sua preferência' not in reply.content
         first_reply_id=reply.id
     monkeypatch.setattr('app.zapi_client.ZapiClient.send_text',lambda *args:{'messageId':'synthetic-receiver-question'})
     assert runtime.outbox.dispatch(first_reply_id)=='accepted'
@@ -829,6 +833,42 @@ def test_core_visit_continuity_asks_receiver_and_never_confirms_without_operatio
         notice=db.query(OutboxMessage).filter_by(tenant_id='tenant-a',conversation_id='conversation-a',author_kind='system').one()
         assert 'ainda não está confirmada' in notice.content
         assert 'não consegui enviar o alerta automaticamente' in notice.content
+
+
+def test_ai_interprets_contextual_channel_confirmation_and_never_confirms_visit(runtime,monkeypatch):
+    from app.models import Agent,Conversation,Message,InterventionRequest,OutboxMessage
+    from app.schemas import ConversationProfile
+    from app.conversation.behavior import opportunity_ready_for_team
+    core(runtime,monkeypatch)
+    with runtime.db() as db:
+        agent=db.get(Agent,'agent-a');agent.conversation_profile=ConversationProfile(visit_booking_enabled=True).model_dump()
+        conversation=db.get(Conversation,'conversation-a')
+        conversation.context_state={'sales_context':{
+            'facts':{
+                'objective':{'value':'orçamento de climatização'},'environment':{'value':'confecção'},
+                'city':{'value':'Ibirité'},'address':{'value':'Av. Industrial, 990 - Petrolina, Ibirité - MG'},
+                'preferred_date':{'value':'amanhã'},'preferred_time':{'value':'08:00'}},
+            'channel_available':True,'channel_phone_status':'unconfirmed','channel_phone_question_asked':True,
+            'receiver_status':'customer_confirmed','receiver_question_asked':True,'appointment_status':'visit_requested'}}
+        conversation.context_expires_at=datetime.now(timezone.utc)+timedelta(minutes=60)
+        db.add(Message(tenant_id='tenant-a',conversation_id=conversation.id,direction='outgoing',author_kind='assistant',kind='text',content='Podemos usar este mesmo WhatsApp para contato sobre a visita?'))
+        db.commit()
+    runtime.tasks.process_webhook_event.run(event(runtime,'contextual-claro',payload={
+        'phone':'synthetic-contact','normalizedKind':'text','normalizedText':'Claro.'}))
+    with runtime.db() as db:revision=db.get(Conversation,'conversation-a').revision
+    monkeypatch.setattr(runtime.tasks,'_graph_response',lambda *a:'{"reply":"Perfeito, vou encaminhar a solicitação à equipe para confirmar a disponibilidade.","interpretation":{"channel_confirmation":"use_current","receiver_confirmation":"unknown","receiver_name":null,"next_required_field":"none"}}')
+    result=runtime.tasks.respond_to_conversation.run('tenant-a','conversation-a',revision)
+    assert result=='visit_confirmation_pending_human'
+    with runtime.db() as db:
+        conversation=db.get(Conversation,'conversation-a');sales=conversation.context_state['sales_context']
+        assert sales['channel_phone_status']=='confirmed'
+        assert sales['appointment_status']=='awaiting_confirmation'
+        assert not opportunity_ready_for_team(sales)
+        ticket=db.query(InterventionRequest).filter_by(tenant_id='tenant-a',conversation_id=conversation.id).one()
+        assert ticket.status=='setup_required'
+        notice=db.query(OutboxMessage).filter_by(tenant_id='tenant-a',conversation_id=conversation.id,author_kind='system').one()
+        assert 'ainda não está confirmada' in notice.content
+        assert notice.content.count('Ibirité')==1
 
 
 def test_core_build_context_backfills_structured_facts_for_existing_conversation(runtime,monkeypatch):
