@@ -44,3 +44,57 @@ Homologar em uma conversa de teste consentida com o provedor efetivamente seleci
 ## Git final
 
 Commit de implementação `929561e327163d4a9bb11abc9a0f418f3542a462` foi enviado a `origin/main`, e `main` local foi avançada para esse commit; um follow-up documental registra o bloqueio do deploy. A branch `fix/enrico-live-visit-followups` permanece no commit de implementação. Worktree limpo para arquivos rastreados; permanecem fora dos commits `Kit Marca/` e `docs/conhecimento/base-atendimento-climatiza-brasil.md`. VPS sem sincronização confirmada e sem deploy.
+
+## Continuação — resposta do modelo e encaminhamento de visita
+
+Data: 11/11/2026
+
+O responsável esclareceu que o diálogo deve ser interpretado pelo modelo com o
+histórico recente, o perfil do agente e o conhecimento recuperado da empresa; não deve
+depender de frases-resposta gravadas. Revisei `_build_context` e o fluxo de
+`respond_to_conversation`: o backend envia esse contexto à inferência, o modelo escreve
+a resposta da mensagem atual e só depois a aplicação aplica campos semânticos
+allowlist. Nenhuma tabela de frases foi criada.
+
+Os testes revelaram duas questões no fluxo de conclusão: quando os dados da visita
+ficavam completos, o atendimento podia pular a geração da resposta do turno; e o
+detector de promessas classificava uma frase de encaminhamento para confirmar
+disponibilidade como compromisso de visita. A correção chama o modelo antes de abrir a
+intervenção. Com alerta de equipe confirmado, a resposta contextual recém-gerada é
+enfileirada como mensagem do assistente através do outbox, que permite o envio sob
+estado `human` para mensagem sem revisão automática. Se o alerta não for confirmado,
+o sistema usa aviso operacional que explica a falha. Preferência continua
+`awaiting_confirmation`; nenhuma visita é confirmada.
+
+O detector exige uma formulação de compromisso operacional no contexto de data/horário.
+Teste unitário cobre tanto “nossa equipe fará a visita amanhã às 10h” (bloqueado) como
+“vou encaminhar sua solicitação à equipe para confirmar a disponibilidade” (permitido).
+O teste de integração simula a interpretação do modelo e o alerta, verifica que a
+resposta do modelo chega ao outbox e a despacha com transporte falso depois da pausa
+humana.
+
+## Validação desta continuação
+
+- `tests --ignore=tests/integration --ignore=tests/test_release_guard.py`: **148
+  passaram** em Python 3.12. Os seis testes do módulo de guard de release foram
+  intencionalmente excluídos desta execução.
+- `tests/integration`: **59 passaram, 2 pulados** em PostgreSQL 16/pgvector descartável
+  em tmpfs e `MEDIA_DIR=/tmp/orchestra-enrico-media`. Os dois skips continuam sendo
+  testes da baseline histórica de migrations indisponível.
+- Integrações LLM/WhatsApp mockadas; nenhuma chamada real, migration produtiva ou
+  mudança na VPS.
+- Sem migration.
+- `git diff --check`: executado após a alteração do código; a documentação desta
+  continuação ainda estava em edição no momento do registro.
+
+## Git e publicação desta continuação
+
+Commit `34168c0` (`Preserva resposta contextual ao encaminhar visita`) criado na
+`main` e enviado com sucesso a `origin/main`. Arquivos de código e testes incluídos:
+`backend/app/conversation/behavior.py`, `backend/app/tasks.py`,
+`tests/integration/test_runtime_safety.py` e `tests/test_conversation_behavior.py`.
+Os documentos canônicos e este handoff registram a continuação em commit separado.
+O último estado confirmado da VPS continua sendo o descrito acima; SSH não conseguiu
+autenticar, portanto não houve sync nem deploy. Os caminhos privados
+`Kit Marca/` e `docs/conhecimento/base-atendimento-climatiza-brasil.md` permanecem
+fora do Git.
