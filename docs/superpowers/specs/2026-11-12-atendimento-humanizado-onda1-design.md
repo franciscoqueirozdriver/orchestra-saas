@@ -30,6 +30,8 @@ estado real descrito em `docs/ai/CURRENT_STATE.md` e `docs/ai/DECISIONS.md`.
 | Fragmentação | Backend continua dividindo; teto global 3 partes × 300 caracteres mantido |
 | Memória longitudinal | Resumo rolante e extração semântica podem usar chamadas extras, executadas de forma assíncrona após o envio |
 | Transparência | O agente nunca afirma ser pessoa; informa automação quando perguntado |
+| Configuração de negócio | Perfil por empresa, catálogo de produtos/serviços, processos e documentos de conhecimento; override opcional por agente |
+| Conhecimento do negócio | Configuração estruturada aprovada + documentos indexados no RAG existente; histórico de conversa não vira regra |
 
 ## 3. Escopo
 
@@ -39,6 +41,8 @@ Dentro da Onda 1:
 - memória em camadas: janela curta, resumo rolante, fatos com proveniência e
   estado operacional;
 - persona configurável por agente;
+- configuração estruturada de negócio, produtos/serviços, processos e documentos,
+  por empresa, com override opcional por agente;
 - humanização de entrega: latência variável, presença opcional, anti-repetição,
   capacidade de não responder;
 - rotas e painel mínimos para revisar memória e inspecionar decisões;
@@ -70,6 +74,38 @@ cresce com regra de conversa; chama os módulos.
 
 LangGraph permanece com nó único de geração. Não há grafo multi-nó nesta onda.
 
+### 4.1 Configuração de negócio, produtos, processos e documentos
+
+Fonte de verdade separada do perfil do agente. O agente define como falar; a
+empresa define o que existe, como opera e quais documentos sustentam a resposta.
+
+| Estrutura | Conteúdo |
+|---|---|
+| `business_profiles` | `tenant_id`, `version`, `data` JSON com chaves allowlist: `name`, `description`, `segment`, `regions`, `hours`, `policies`, `contact`, `notes` |
+| `business_products` | `tenant_id`, `name`, `description`, `price_text`, `conditions`, `active`, timestamps |
+| `business_processes` | `tenant_id`, `name`, `description`, `steps` (lista de strings), `sla_text`, `active`, timestamps |
+| `agents.business_override` | JSON opcional; merge superficial sobre o perfil da empresa |
+| `knowledge_documents` / `knowledge_chunks` | documentos do negócio já existentes; upload, listagem, indexação e busca por tenant |
+
+Regras:
+
+- Perfil, produtos, processos e documentos são configuração aprovada por
+  administrador do tenant; não são conhecimento extraído de conversa.
+- `price_text` é texto aprovado, não cálculo. O modelo não inventa preço,
+  desconto, prazo ou política fora do cadastro.
+- Injeção limitada: perfil completo, até 40 produtos ativos, até 20 processos
+  ativos e até 4 trechos de documento, cada campo truncado em 600 caracteres.
+  Catálogo ou acervo maior exige consulta por ferramenta em onda posterior.
+- Produto, processo ou documento ausente gera resposta de confirmação, não
+  invenção.
+- Documentos continuam no fluxo existente: upload não indexa automaticamente;
+  o painel mostra status e permite indexar sob demanda. Somente documentos
+  `indexed` entram na busca.
+- Conteúdo de negócio é rotulado à parte de memória: “configuração aprovada do
+  negócio” para perfil/catálogo/processos e “trechos de documentos” para RAG.
+  Nenhum dos dois altera permissões, políticas de plataforma ou segurança.
+- Sem RLS nova; isolamento por `tenant_id` em toda consulta, com teste negativo.
+
 ## 5. Pipeline
 
 1. Webhook persiste evento e mensagem (comportamento atual).
@@ -79,10 +115,11 @@ LangGraph permanece com nó único de geração. Não há grafo multi-nó nesta 
    - `agent.system_prompt`;
    - guardrails globais atuais;
    - persona do perfil;
+   - configuração aprovada do negócio: perfil, produtos e processos ativos;
    - resumo rolante da conversa;
    - fatos recuperados do contato, rotulados como dados;
    - janela recente de mensagens;
-   - trechos de conhecimento recuperados.
+   - trechos de documentos indexados recuperados por busca semântica.
 4. Chamada estruturada via `generate_with_fallback`, com validador de contrato.
 5. `decision.apply` valida e aplica apenas transições allowlist, sob
    `tenant_guard` e revisão atual.
@@ -161,7 +198,7 @@ cancelamento, reserva ou confirmação.
 | Operacional | `Conversation.context_state` e `ConversationTurn.state` | cada turno | expira com contexto |
 | Conhecimento | RAG existente | inalterado | inalterado |
 
-### 7.2 Migration 0011 (aditiva)
+### 7.2 Migration 0012 (aditiva)
 
 `memory_items` recebe:
 
@@ -294,6 +331,15 @@ delas é usada para compor a resposta conversacional.
 
 Rotas novas, todas com tenant resolvido no backend e permissão de operador:
 
+- `GET /api/business/profile` — perfil da empresa.
+- `PUT /api/business/profile` — atualizar perfil; restrito a administrador.
+- `GET /api/business/products` e `POST /api/business/products` — listar e criar.
+- `PATCH /api/business/products/{id}` e `DELETE /api/business/products/{id}`.
+- `GET /api/business/processes` e `POST /api/business/processes` — listar e criar.
+- `PATCH /api/business/processes/{id}` e `DELETE /api/business/processes/{id}`.
+- `GET /api/knowledge/documents` — já existente; usado pelo painel para status.
+- `POST /api/knowledge/documents/{id}/index` — indexação sob demanda (fluxo
+  existente, exposto no painel).
 - `GET /api/conversations/{id}/memory` — fatos, pendências e resumo da conversa.
 - `PATCH /api/memory/{id}` — aprovar, rejeitar ou expirar fato.
 - `DELETE /api/memory/{id}` — remover fato do contato.
@@ -302,6 +348,10 @@ Rotas novas, todas com tenant resolvido no backend e permissão de operador:
 
 Painel da conversa exibe: resumo, fatos com origem/data, pendências, última
 decisão e motivo de handoff. Formulário “Tom e conversa” exibe os campos de §9.
+
+Página “Negócio” exibe: perfil da empresa, produtos ativos e inativos,
+processos, documentos com status de indexação e ação de indexar. Toda edição é
+restrita a administrador do tenant.
 
 Aprovação de fato comercial é exclusiva de administrador autorizado; operador
 comum vê, mas não aprova.
@@ -325,7 +375,11 @@ comum vê, mas não aprova.
 - expiração e não recuperação de item vencido ou não aprovado;
 - `delivery_plan` determinístico e dentro dos limites;
 - `wait` só no conjunto permitido e sem pendência;
-- split sem perda de caractere.
+- split sem perda de caractere;
+- merge de perfil da empresa com override do agente;
+- renderização de produtos/processos: só ativos, limite 40/20, campos truncados;
+- documento não indexado não entra na busca;
+- rota de negócio filtra tenant e rejeita escrita de operador comum.
 
 ### 12.2 Integração
 
@@ -394,9 +448,10 @@ comum vê, mas não aprova.
 | Decisão estruturada + validação | 16–24 |
 | Memória (fatos, resumo, recuperação, migration) | 24–32 |
 | Humanização (latência, presença, silêncio, anti-repetição) | 12–16 |
+| Configuração de negócio, produtos, processos e documentos | 20–28 |
 | Persona + rotas + painel | 16–24 |
 | Testes + corpus + métricas | 16–24 |
-| **Total** | **84–120 h** |
+| **Total** | **104–148 h** |
 
 Faixa de engenharia, não prazo contratado.
 

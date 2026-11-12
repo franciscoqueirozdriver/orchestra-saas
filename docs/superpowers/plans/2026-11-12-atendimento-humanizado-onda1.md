@@ -18,10 +18,10 @@
 - Limite de entrega mantido: 3 partes × 300 caracteres; divisão sem perda de caractere.
 - Envelope inválido nunca chega ao WhatsApp; cadeia esgotada falha fechada para intervenção.
 - Fatos automáticos só com proveniência; fato comercial (`kind='business'`) exige aprovação.
-- Migration nova é aditiva e é a `0011`; não editar migrations históricas.
+- Migrations novas são aditivas: `0011` (negócio) e `0012` (memória); não editar migrations históricas.
 - Não alterar comportamento de opt-out, consentimento, takeover, cancelamento ou revisão.
 - Commits pequenos, em português, um por task.
-- Testes unitários: `pytest -q`. Integração: `DATABASE_URL` de banco descartável.
+- Testes unitários: `pytest -q`. Integração: `TEST_DATABASE_URL` de banco descartável `orchestra_consolidation_test`.
 
 ## File Structure
 
@@ -30,8 +30,11 @@ Criar:
 - `backend/app/conversation/decision.py` — contrato, parser, validação, patch de estado.
 - `backend/app/conversation/memory.py` — fatos, dedupe, recuperação, prompt de resumo.
 - `backend/app/conversation/humanize.py` — plano de entrega, silêncio, aberturas.
+- `backend/app/conversation/business.py` — configuração aprovada do negócio.
+- `backend/app/routes_business.py` — rotas de perfil, produtos e processos.
 - `backend/app/routes_memory.py` — rotas de memória e decisão.
-- `backend/migrations/versions/0011_conversation_memory.py` — colunas aditivas.
+- `backend/migrations/versions/0011_business_configuration.py` — tabelas de negócio.
+- `backend/migrations/versions/0012_conversation_memory.py` — colunas aditivas.
 - `tests/test_conversation_decision.py`
 - `tests/test_conversation_memory.py`
 - `tests/test_conversation_humanize.py`
@@ -196,6 +199,487 @@ Expected: PASS.
 ```bash
 git add backend/app/schemas.py backend/app/conversation/behavior.py tests/test_conversation_behavior.py tests/test_schemas.py
 git commit -m "Adiciona dimensões de persona ao perfil conversacional"
+```
+
+---
+
+### Task 1B: Configuração de negócio, produtos, processos e documentos
+
+**Files:**
+- Modify: `backend/app/models.py:40-54` (novas tabelas e `Agent.business_override`)
+- Create: `backend/migrations/versions/0011_business_configuration.py`
+- Create: `backend/app/conversation/business.py`
+- Modify: `backend/app/schemas.py`
+- Create: `backend/app/routes_business.py`
+- Modify: `backend/app/main.py:8-16,45`
+- Create: `tests/integration/conftest.py` (mover fixtures `engine` e `runtime` de `tests/integration/test_runtime_safety.py:17-64`)
+- Modify: `tests/integration/test_runtime_safety.py:17-64` (remover as fixtures movidas)
+- Test: `tests/test_business_config.py`
+- Test: `tests/integration/test_business_config.py`
+
+**Interfaces:**
+- Consumes: `Tenant`, `Agent`, `KnowledgeDocument` (documentos existentes).
+- Produces: `merge_business_profile(base, override) -> dict`, `render_business_block(profile, products, processes) -> str`, `business_context(db, tenant_id, agent) -> str`; rotas `/api/business/*`.
+
+- [ ] **Step 1: Write the failing unit test**
+
+Primeiro mova as constantes `URL`/`ROOT` e as fixtures `engine` e `runtime` de `tests/integration/test_runtime_safety.py` linhas 17-64 para `tests/integration/conftest.py`, mantendo o mesmo código e imports. Como o `pytestmark` de skip fica no arquivo de teste, adicione no início da fixture `engine`:
+
+```python
+    if not URL:
+        pytest.skip('requires explicitly isolated PostgreSQL')
+```
+
+`queue()` e `event()` continuam no arquivo de teste.
+
+Create `tests/test_business_config.py`:
+
+```python
+from types import SimpleNamespace
+from app.conversation.business import merge_business_profile, render_business_block
+
+
+def test_merge_keeps_base_and_applies_only_known_override_keys():
+    base = {'name': 'Empresa A', 'hours': '9h às 18h', 'policies': ['troca em 7 dias']}
+    merged = merge_business_profile(base, {'hours': '8h às 17h', 'inventado': 'x'})
+    assert merged['name'] == 'Empresa A'
+    assert merged['hours'] == '8h às 17h'
+    assert 'inventado' not in merged
+
+
+def test_render_labels_approved_configuration_and_limits_catalog():
+    products = [SimpleNamespace(name=f'Produto {i}', description='d', price_text='R$ 10',
+                                conditions='c') for i in range(50)]
+    processes = [SimpleNamespace(name=f'Processo {i}', description='d', steps=['a', 'b'],
+                                 sla_text='2 dias') for i in range(30)]
+    text = render_business_block({'name': 'Empresa A'}, products, processes)
+    assert 'configuração aprovada do negócio' in text.lower()
+    assert text.count('Produto:') == 40
+    assert text.count('Processo:') == 20
+    assert all(len(line) <= 600 for line in text.splitlines())
+
+
+def test_render_labels_missing_catalog_rule():
+    text = render_business_block({'name': 'Empresa A'}, [], [])
+    assert 'não invente' in text.lower() or 'confirme' in text.lower()
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `pytest tests/test_business_config.py -q`
+Expected: FAIL, `ModuleNotFoundError`.
+
+- [ ] **Step 3: Add models**
+
+In `backend/app/models.py`, add after `Agent`:
+
+```python
+class BusinessProfile(Base):
+    __tablename__ = 'business_profiles'
+    tenant_id: Mapped[str] = mapped_column(ForeignKey('tenants.id', ondelete='CASCADE'), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default='1')
+    data: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default='{}')
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class BusinessProduct(Base):
+    __tablename__ = 'business_products'
+    __table_args__ = (Index('ix_business_products_tenant_active', 'tenant_id', 'active'),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey('tenants.id', ondelete='CASCADE'), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default='')
+    price_text: Mapped[str] = mapped_column(String(200), nullable=False, default='')
+    conditions: Mapped[str] = mapped_column(Text, nullable=False, default='')
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default='true')
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class BusinessProcess(Base):
+    __tablename__ = 'business_processes'
+    __table_args__ = (Index('ix_business_processes_tenant_active', 'tenant_id', 'active'),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey('tenants.id', ondelete='CASCADE'), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default='')
+    steps: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default='[]')
+    sla_text: Mapped[str] = mapped_column(String(500), nullable=False, default='')
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default='true')
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+```
+
+Add to `Agent` after `conversation_profile`:
+
+```python
+    business_override: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default='{}')
+```
+
+- [ ] **Step 4: Write migration**
+
+Create `backend/migrations/versions/0011_business_configuration.py`:
+
+```python
+"""Add tenant business profile, product and process configuration."""
+from alembic import op
+import sqlalchemy as sa
+
+revision = '0011_business_configuration'
+down_revision = '0010_wame_api_base_url'
+branch_labels = depends_on = None
+
+
+def upgrade():
+    op.create_table('business_profiles',
+        sa.Column('tenant_id', sa.String(36), sa.ForeignKey('tenants.id', ondelete='CASCADE'), primary_key=True),
+        sa.Column('version', sa.Integer(), nullable=False, server_default='1'),
+        sa.Column('data', sa.JSON(), nullable=False, server_default='{}'),
+        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()))
+    op.create_table('business_products',
+        sa.Column('id', sa.String(36), primary_key=True),
+        sa.Column('tenant_id', sa.String(36), sa.ForeignKey('tenants.id', ondelete='CASCADE'), nullable=False, index=True),
+        sa.Column('name', sa.String(160), nullable=False),
+        sa.Column('description', sa.Text(), nullable=False, server_default=''),
+        sa.Column('price_text', sa.String(200), nullable=False, server_default=''),
+        sa.Column('conditions', sa.Text(), nullable=False, server_default=''),
+        sa.Column('active', sa.Boolean(), nullable=False, server_default='true'),
+        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()))
+    op.create_index('ix_business_products_tenant_active', 'business_products', ['tenant_id', 'active'])
+    op.create_table('business_processes',
+        sa.Column('id', sa.String(36), primary_key=True),
+        sa.Column('tenant_id', sa.String(36), sa.ForeignKey('tenants.id', ondelete='CASCADE'), nullable=False, index=True),
+        sa.Column('name', sa.String(160), nullable=False),
+        sa.Column('description', sa.Text(), nullable=False, server_default=''),
+        sa.Column('steps', sa.JSON(), nullable=False, server_default='[]'),
+        sa.Column('sla_text', sa.String(500), nullable=False, server_default=''),
+        sa.Column('active', sa.Boolean(), nullable=False, server_default='true'),
+        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()))
+    op.create_index('ix_business_processes_tenant_active', 'business_processes', ['tenant_id', 'active'])
+    op.add_column('agents', sa.Column('business_override', sa.JSON(), nullable=False, server_default='{}'))
+
+
+def downgrade():
+    op.drop_column('agents', 'business_override')
+    op.drop_index('ix_business_processes_tenant_active', table_name='business_processes')
+    op.drop_table('business_processes')
+    op.drop_index('ix_business_products_tenant_active', table_name='business_products')
+    op.drop_table('business_products')
+    op.drop_table('business_profiles')
+```
+
+- [ ] **Step 5: Add schemas**
+
+In `backend/app/schemas.py`:
+
+```python
+class BusinessProfileUpdate(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    name: str = Field(default='', max_length=160)
+    description: str = Field(default='', max_length=2000)
+    segment: str = Field(default='', max_length=160)
+    regions: list[str] = Field(default_factory=list, max_length=30)
+    hours: str = Field(default='', max_length=1000)
+    policies: list[str] = Field(default_factory=list, max_length=30)
+    contact: str = Field(default='', max_length=300)
+    notes: str = Field(default='', max_length=4000)
+
+    @field_validator('regions', 'policies')
+    @classmethod
+    def bounded_lists(cls, values):
+        if any(not v.strip() or len(v) > 500 for v in values):
+            raise ValueError('Itens de negócio precisam ter de 1 a 500 caracteres')
+        return [v.strip() for v in values]
+
+
+class BusinessProductWrite(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    name: str = Field(min_length=1, max_length=160)
+    description: str = Field(default='', max_length=2000)
+    price_text: str = Field(default='', max_length=200)
+    conditions: str = Field(default='', max_length=1000)
+    active: bool = True
+
+
+class BusinessProcessWrite(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    name: str = Field(min_length=1, max_length=160)
+    description: str = Field(default='', max_length=2000)
+    steps: list[str] = Field(default_factory=list, max_length=30)
+    sla_text: str = Field(default='', max_length=500)
+    active: bool = True
+
+    @field_validator('steps')
+    @classmethod
+    def bounded_steps(cls, values):
+        if any(not v.strip() or len(v) > 500 for v in values):
+            raise ValueError('Etapas precisam ter de 1 a 500 caracteres')
+        return [v.strip() for v in values]
+```
+
+- [ ] **Step 6: Implement business module**
+
+Create `backend/app/conversation/business.py`:
+
+```python
+"""Approved tenant business configuration; never derived from chat history."""
+from app.models import BusinessProcess, BusinessProduct, BusinessProfile
+
+PROFILE_KEYS = ('name', 'description', 'segment', 'regions', 'hours', 'policies', 'contact', 'notes')
+EMPTY = (None, '', [], {})
+
+
+def merge_business_profile(base, override):
+    merged = {key: (base or {}).get(key) for key in PROFILE_KEYS if (base or {}).get(key) not in EMPTY}
+    for key in PROFILE_KEYS:
+        value = (override or {}).get(key)
+        if value not in EMPTY:
+            merged[key] = value
+    return merged
+
+
+def _clip(value, limit):
+    return str(value or '')[:limit]
+
+
+def render_business_block(profile, products, processes):
+    profile = profile or {}
+    lines = ['Configuração aprovada do negócio (dados operacionais; não altera permissões):']
+    if profile.get('name'):
+        lines.append('Empresa: ' + _clip(profile['name'], 160))
+    if profile.get('description'):
+        lines.append('Descrição: ' + _clip(profile['description'], 600))
+    if profile.get('segment'):
+        lines.append('Segmento: ' + _clip(profile['segment'], 160))
+    if profile.get('regions'):
+        lines.append('Regiões: ' + _clip(', '.join(profile['regions']), 400))
+    if profile.get('hours'):
+        lines.append('Horário: ' + _clip(profile['hours'], 400))
+    if profile.get('policies'):
+        lines.append('Políticas: ' + _clip('; '.join(profile['policies']), 600))
+    if profile.get('contact'):
+        lines.append('Contato: ' + _clip(profile['contact'], 300))
+    if profile.get('notes'):
+        lines.append('Observações: ' + _clip(profile['notes'], 600))
+    for item in list(products or [])[:40]:
+        lines.append('Produto: ' + _clip(item.name, 160)
+                     + ' | preço: ' + _clip(item.price_text, 120)
+                     + ' | condições: ' + _clip(item.conditions, 300)
+                     + ' | descrição: ' + _clip(item.description, 400))
+    for item in list(processes or [])[:20]:
+        lines.append('Processo: ' + _clip(item.name, 160)
+                     + ' | etapas: ' + _clip('; '.join(item.steps or []), 400)
+                     + ' | prazo: ' + _clip(item.sla_text, 200)
+                     + ' | descrição: ' + _clip(item.description, 300))
+    if not products:
+        lines.append('Nenhum produto cadastrado: não invente produto, preço ou condição; confirme com a equipe.')
+    if not processes:
+        lines.append('Nenhum processo cadastrado: não invente prazo ou procedimento; confirme com a equipe.')
+    return '\n'.join(line[:600] for line in lines)
+
+
+def business_context(db, tenant_id, agent):
+    row = db.query(BusinessProfile).filter_by(tenant_id=tenant_id).first()
+    profile = merge_business_profile(row.data if row else {}, getattr(agent, 'business_override', {}) or {})
+    products = (db.query(BusinessProduct)
+                .filter_by(tenant_id=tenant_id, active=True)
+                .order_by(BusinessProduct.name).limit(40).all())
+    processes = (db.query(BusinessProcess)
+                 .filter_by(tenant_id=tenant_id, active=True)
+                 .order_by(BusinessProcess.name).limit(20).all())
+    if not profile and not products and not processes:
+        return ''
+    return render_business_block(profile, products, processes)
+```
+
+- [ ] **Step 7: Add routes**
+
+Create `backend/app/routes_business.py`:
+
+```python
+"""Tenant business configuration. Writes require a tenant administrator."""
+from fastapi import APIRouter, HTTPException
+
+from app.control import serialized_mutation
+from app.dependencies import CurrentUser, DbSession, TenantId
+from app.models import BusinessProcess, BusinessProduct, BusinessProfile
+from app.schemas import BusinessProcessWrite, BusinessProductWrite, BusinessProfileUpdate
+
+router = APIRouter(prefix='/api/business', tags=['business'])
+
+
+def _admin(user):
+    if user.role not in {'platform_admin', 'tenant_admin'}:
+        raise HTTPException(403, detail='Ação restrita a administradores')
+
+
+def _product(row):
+    return {'id': row.id, 'name': row.name, 'description': row.description,
+            'price_text': row.price_text, 'conditions': row.conditions, 'active': row.active}
+
+
+def _process(row):
+    return {'id': row.id, 'name': row.name, 'description': row.description,
+            'steps': row.steps, 'sla_text': row.sla_text, 'active': row.active}
+
+
+@router.get('/profile')
+def read_profile(db: DbSession, tenant_id: TenantId):
+    row = db.query(BusinessProfile).filter_by(tenant_id=tenant_id).first()
+    return {'version': row.version if row else 0, 'data': row.data if row else {}}
+
+
+@router.put('/profile')
+@serialized_mutation
+def save_profile(payload: BusinessProfileUpdate, db: DbSession, tenant_id: TenantId, user: CurrentUser):
+    _admin(user)
+    row = db.query(BusinessProfile).filter_by(tenant_id=tenant_id).first()
+    data = payload.model_dump()
+    if row is None:
+        row = BusinessProfile(tenant_id=tenant_id, version=1, data=data)
+        db.add(row)
+    else:
+        row.data = data
+        row.version += 1
+    db.commit()
+    return {'version': row.version, 'data': row.data}
+
+
+@router.get('/products')
+def list_products(db: DbSession, tenant_id: TenantId):
+    return [_product(row) for row in db.query(BusinessProduct)
+            .filter_by(tenant_id=tenant_id).order_by(BusinessProduct.name).all()]
+
+
+@router.post('/products', status_code=201)
+@serialized_mutation
+def create_product(payload: BusinessProductWrite, db: DbSession, tenant_id: TenantId, user: CurrentUser):
+    _admin(user)
+    row = BusinessProduct(tenant_id=tenant_id, **payload.model_dump())
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _product(row)
+
+
+@router.patch('/products/{product_id}')
+@serialized_mutation
+def update_product(product_id: str, payload: BusinessProductWrite, db: DbSession, tenant_id: TenantId, user: CurrentUser):
+    _admin(user)
+    row = db.query(BusinessProduct).filter_by(tenant_id=tenant_id, id=product_id).first()
+    if row is None:
+        raise HTTPException(404, detail='Produto não encontrado')
+    for key, value in payload.model_dump().items():
+        setattr(row, key, value)
+    db.commit()
+    return _product(row)
+
+
+@router.delete('/products/{product_id}', status_code=204)
+@serialized_mutation
+def delete_product(product_id: str, db: DbSession, tenant_id: TenantId, user: CurrentUser):
+    _admin(user)
+    row = db.query(BusinessProduct).filter_by(tenant_id=tenant_id, id=product_id).first()
+    if row is None:
+        raise HTTPException(404, detail='Produto não encontrado')
+    db.delete(row)
+    db.commit()
+
+
+@router.get('/processes')
+def list_processes(db: DbSession, tenant_id: TenantId):
+    return [_process(row) for row in db.query(BusinessProcess)
+            .filter_by(tenant_id=tenant_id).order_by(BusinessProcess.name).all()]
+
+
+@router.post('/processes', status_code=201)
+@serialized_mutation
+def create_process(payload: BusinessProcessWrite, db: DbSession, tenant_id: TenantId, user: CurrentUser):
+    _admin(user)
+    row = BusinessProcess(tenant_id=tenant_id, **payload.model_dump())
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _process(row)
+
+
+@router.patch('/processes/{process_id}')
+@serialized_mutation
+def update_process(process_id: str, payload: BusinessProcessWrite, db: DbSession, tenant_id: TenantId, user: CurrentUser):
+    _admin(user)
+    row = db.query(BusinessProcess).filter_by(tenant_id=tenant_id, id=process_id).first()
+    if row is None:
+        raise HTTPException(404, detail='Processo não encontrado')
+    for key, value in payload.model_dump().items():
+        setattr(row, key, value)
+    db.commit()
+    return _process(row)
+
+
+@router.delete('/processes/{process_id}', status_code=204)
+@serialized_mutation
+def delete_process(process_id: str, db: DbSession, tenant_id: TenantId, user: CurrentUser):
+    _admin(user)
+    row = db.query(BusinessProcess).filter_by(tenant_id=tenant_id, id=process_id).first()
+    if row is None:
+        raise HTTPException(404, detail='Processo não encontrado')
+    db.delete(row)
+    db.commit()
+```
+
+- [ ] **Step 8: Register router**
+
+In `backend/app/main.py`:
+
+```python
+from app.routes_business import router as business_router
+```
+
+Include `business_router` in the tuple at line 45.
+
+- [ ] **Step 9: Add integration tenant test**
+
+Create `tests/integration/test_business_config.py`:
+
+```python
+from types import SimpleNamespace
+
+from app.conversation.business import business_context
+from app.models import BusinessProduct, BusinessProfile
+
+
+def test_business_context_is_tenant_scoped(runtime):
+    with runtime.db() as db:
+        db.add_all([
+            BusinessProfile(tenant_id='tenant-a', data={'name': 'Empresa A'}),
+            BusinessProfile(tenant_id='tenant-b', data={'name': 'Empresa B'}),
+            BusinessProduct(tenant_id='tenant-a', name='Produto A'),
+            BusinessProduct(tenant_id='tenant-b', name='Produto B'),
+        ])
+        db.commit()
+    with runtime.db() as db:
+        block = business_context(db, 'tenant-a', SimpleNamespace(business_override={}))
+    assert 'Produto A' in block
+    assert 'Produto B' not in block
+    assert 'Empresa B' not in block
+```
+
+- [ ] **Step 10: Run tests and migration**
+
+Run: `pytest tests/test_business_config.py -q`
+Expected: PASS.
+
+Run integration with disposable DB:
+`TEST_DATABASE_URL=postgresql+psycopg://.../orchestra_consolidation_test pytest tests/integration/test_business_config.py -q`
+Expected: PASS and migration `0011_business_configuration` applied.
+
+- [ ] **Step 11: Commit**
+
+```bash
+git add backend/app/models.py backend/migrations/versions/0011_business_configuration.py backend/app/conversation/business.py backend/app/schemas.py backend/app/routes_business.py backend/app/main.py tests/test_business_config.py tests/integration/test_business_config.py
+git commit -m "Adiciona configuração de negócio, produtos e processos"
 ```
 
 ---
@@ -407,11 +891,11 @@ git commit -m "Adiciona contrato estruturado de decisão conversacional"
 
 ---
 
-### Task 3: Memória em camadas e migration 0011
+### Task 3: Memória em camadas e migration 0012
 
 **Files:**
 - Modify: `backend/app/models.py:232-241`
-- Create: `backend/migrations/versions/0011_conversation_memory.py`
+- Create: `backend/migrations/versions/0012_conversation_memory.py`
 - Create: `backend/app/conversation/memory.py`
 - Test: `tests/test_conversation_memory.py`
 
@@ -505,15 +989,15 @@ from sqlalchemy import Boolean, DateTime, Float, ForeignKey, ForeignKeyConstrain
 
 - [ ] **Step 4: Write migration**
 
-Create `backend/migrations/versions/0011_conversation_memory.py`:
+Create `backend/migrations/versions/0012_conversation_memory.py`:
 
 ```python
 """Add conversation memory provenance fields."""
 from alembic import op
 import sqlalchemy as sa
 
-revision = '0011_conversation_memory'
-down_revision = '0010_wame_api_base_url'
+revision = '0012_conversation_memory'
+down_revision = '0011_business_configuration'
 branch_labels = depends_on = None
 
 
@@ -639,12 +1123,12 @@ Run: `pytest tests/test_conversation_memory.py -q`
 Expected: PASS.
 
 Run: `cd backend && alembic upgrade head`
-Expected: `0011_conversation_memory` aplicada sem erro.
+Expected: `0012_conversation_memory` aplicada sem erro.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add backend/app/models.py backend/migrations/versions/0011_conversation_memory.py backend/app/conversation/memory.py tests/test_conversation_memory.py
+git add backend/app/models.py backend/migrations/versions/0012_conversation_memory.py backend/app/conversation/memory.py tests/test_conversation_memory.py
 git commit -m "Adiciona memória conversacional com proveniência"
 ```
 
@@ -806,8 +1290,6 @@ git commit -m "Aplica ritmo variável por parte e anti-repetição"
 
 **Files:**
 - Modify: `backend/app/tasks.py:27,251-333,391-515`
-- Create: `tests/integration/conftest.py`
-- Modify: `tests/integration/test_runtime_safety.py:17-64` (mover fixture `runtime`, `engine` e `queue` para o conftest)
 - Test: `tests/integration/test_conversation_core.py`
 
 **Interfaces:**
@@ -816,9 +1298,7 @@ git commit -m "Aplica ritmo variável por parte e anti-repetição"
 
 - [ ] **Step 1: Write the failing integration test**
 
-Primeiro mova o conteúdo de `tests/integration/test_runtime_safety.py` linhas 17-64 (fixtures `engine` e `runtime` e helpers de setup) para `tests/integration/conftest.py`, mantendo o mesmo código. O pytest disponibiliza as fixtures para ambos os módulos. `test_runtime_safety.py` mantém `queue()` e `event()` próprios.
-
-Depois crie `tests/integration/test_conversation_core.py`. Add:
+Crie `tests/integration/test_conversation_core.py`. As fixtures `engine` e `runtime` já vivem em `tests/integration/conftest.py` desde a Task 1B. Add:
 
 ```python
 import pytest
@@ -893,6 +1373,7 @@ At the end of the import block in `backend/app/tasks.py`:
 from app.conversation.decision import parse_decision_envelope, clean_visit, state_patch, contract_instructions
 from app.conversation.memory import memory_context, record_facts
 from app.conversation.humanize import delivery_plan, should_wait, remember_opening
+from app.conversation.business import business_context
 ```
 
 Add helpers after `_validate_visit_response_contract`:
@@ -955,6 +1436,9 @@ def _handoff_from_decision(db, tenant_id, conversation_id, reply):
 Inside `_build_context`, after the existing `memories` block:
 
 ```python
+    business_block = business_context(db, agent.tenant_id, agent)
+    if business_block:
+        context.append(business_block)
     stored = conversation.context_state or {}
     if profile.memory_enabled:
         if stored.get('summary'):
@@ -1516,6 +2000,184 @@ Expected: PASS.
 ```bash
 git add frontend/app.js tests/ui/conversation-panel.cjs tests/ui/memory-review.cjs
 git commit -m "Exibe persona e revisão de memória no painel"
+```
+
+---
+
+### Task 8B: Painel de negócio, catálogo, processos e documentos
+
+**Files:**
+- Modify: `frontend/index.html:45-53` (link de navegação)
+- Modify: `frontend/app.js:8` (labels)
+- Modify: `frontend/app.js:54` (dispatch de rota)
+- Create: `frontend/business-ui.js` (página e formulários)
+- Modify: `frontend/index.html` (carregar `business-ui.js`)
+- Test: `tests/ui/business-panel.cjs`
+
+**Interfaces:**
+- Consumes: `/business/profile`, `/business/products`, `/business/processes`, `/knowledge/documents`, `/knowledge/documents/{id}/index`, `request`, `pageHead`, `table`, `openModal`, `formSubmit`, `toast`, `askConfirm`, `esc`, `go`.
+- Produces: rota `#business` com perfil, catálogo, processos e documentos.
+
+- [ ] **Step 1: Wire navigation and route**
+
+In `frontend/index.html`, after the Conhecimento link:
+
+```html
+<a href="#business" data-route="business"><span>▦</span> Negócio</a>
+```
+
+In `frontend/app.js:8`, add `business:'Negócio'` to `labels`.
+
+In `frontend/app.js:54`, add `business:business` to the route map object.
+
+In `frontend/app.js`, after `const llmUI=...`, instantiate the module:
+
+```javascript
+const businessUI=window.OrchestraBusinessUI.create({request,esc,pageHead,table,openModal,closeModal,formSubmit,toast,askConfirm,loading,errorBox,getRoute:()=>state.route});
+function business(){businessUI.render()}
+```
+
+In `frontend/index.html`, load the new module before `app.js`:
+
+```html
+<script src="business-ui.js"></script>
+```
+
+- [ ] **Step 2: Implement the UI module**
+
+Create `frontend/business-ui.js`:
+
+```javascript
+(function(){
+  function create(ui){
+    const {request,esc,pageHead,table,openModal,closeModal,formSubmit,toast,askConfirm,loading,errorBox,getRoute}=ui;
+    async function render(){
+      const root=document.querySelector('#page-content');
+      root.innerHTML=pageHead('Negócio','Configure o que a empresa vende, como opera e quais documentos sustentam o atendimento.')+loading();
+      try{
+        const [profile,products,processes,documents]=await Promise.all([
+          request('/business/profile'),request('/business/products'),
+          request('/business/processes'),request('/knowledge/documents')]);
+        if(getRoute()!=='business')return;
+        const productRows=products.map(x=>`<tr><td>${esc(x.name)}</td><td>${esc(x.price_text||'—')}</td><td>${x.active?'Ativo':'Inativo'}</td><td><button class="small-button" data-edit-product="${esc(x.id)}">Editar</button> <button class="small-button" data-delete-product="${esc(x.id)}">Excluir</button></td></tr>`).join('');
+        const processRows=processes.map(x=>`<tr><td>${esc(x.name)}</td><td>${esc((x.steps||[]).join(' → '))}</td><td>${esc(x.sla_text||'—')}</td><td><button class="small-button" data-edit-process="${esc(x.id)}">Editar</button> <button class="small-button" data-delete-process="${esc(x.id)}">Excluir</button></td></tr>`).join('');
+        const docRows=documents.map(x=>`<tr><td>${esc(x.filename)}</td><td>${x.status==='indexed'?'Disponível para busca':esc(x.status)}</td><td>${x.status==='indexed'?'':`<button class="small-button" data-index-doc="${esc(x.id)}">Indexar</button>`}</td></tr>`).join('');
+        const data=profile.data||{};
+        root.innerHTML=pageHead('Negócio','Configure o que a empresa vende, como opera e quais documentos sustentam o atendimento.')+
+          `<section class="card panel"><h2>Perfil da empresa</h2><p><strong>${esc(data.name||'Não configurado')}</strong> · ${esc(data.hours||'Horário não informado')}</p><p>${esc(data.description||'')}</p><button class="small-button" id="edit-business-profile">Editar perfil</button></section>`+
+          `<section class="card panel"><div class="panel-head"><div><h2>Produtos e serviços</h2><p>Preço e condições são textos aprovados; o agente não calcula desconto.</p></div><button class="small-button" id="add-product">Novo produto</button></div>${table(['Nome','Preço','Status','Ações'],productRows,'Nenhum produto cadastrado.')}</section>`+
+          `<section class="card panel"><div class="panel-head"><div><h2>Processos</h2><p>Etapas e prazos usados pelo atendimento.</p></div><button class="small-button" id="add-process">Novo processo</button></div>${table(['Nome','Etapas','Prazo','Ações'],processRows,'Nenhum processo cadastrado.')}</section>`+
+          `<section class="card panel"><div class="panel-head"><div><h2>Documentos</h2><p>Somente documentos indexados entram na busca.</p></div><a class="button button-secondary" href="#knowledge">Gerenciar documentos</a></div>${table(['Documento','Status','Ação'],docRows,'Nenhum documento enviado.')}</section>`;
+        document.querySelector('#edit-business-profile').onclick=()=>profileForm(data);
+        document.querySelector('#add-product').onclick=()=>productForm(null);
+        document.querySelector('#add-process').onclick=()=>processForm(null);
+        document.querySelectorAll('[data-edit-product]').forEach(b=>b.onclick=()=>productForm(products.find(x=>String(x.id)===b.dataset.editProduct)));
+        document.querySelectorAll('[data-edit-process]').forEach(b=>b.onclick=()=>processForm(processes.find(x=>String(x.id)===b.dataset.editProcess)));
+        document.querySelectorAll('[data-delete-product]').forEach(b=>b.onclick=()=>remove('produto',`/business/products/${encodeURIComponent(b.dataset.deleteProduct)}`));
+        document.querySelectorAll('[data-delete-process]').forEach(b=>b.onclick=()=>remove('processo',`/business/processes/${encodeURIComponent(b.dataset.deleteProcess)}`));
+        document.querySelectorAll('[data-index-doc]').forEach(b=>b.onclick=async()=>{
+          if(!(await askConfirm('Indexar envia o texto extraído ao serviço de embeddings configurado. Continuar?',{title:'Indexar documento',confirmLabel:'Indexar'})))return;
+          b.disabled=true;try{await request('/knowledge/documents/'+encodeURIComponent(b.dataset.indexDoc)+'/index',{method:'POST'});toast('Documento indexado.','success');render();}catch(e){toast(e.message,'error');b.disabled=false;}
+        });
+      }catch(e){if(getRoute()==='business')root.innerHTML=pageHead('Negócio','Configuração do negócio.')+errorBox(e)}
+    }
+    async function remove(label,path){
+      if(!(await askConfirm(`Excluir este ${label}?`,{title:'Excluir',confirmLabel:'Excluir',danger:true})))return;
+      try{await request(path,{method:'DELETE'});toast(`${label[0].toUpperCase()+label.slice(1)} excluído.`,'success');render();}catch(e){toast(e.message,'error')}
+    }
+    function profileForm(data){
+      openModal('Perfil da empresa',`<form id="business-profile-form">
+        <label class="field-label">Nome<input class="field-control" name="name" maxlength="160" value="${esc(data.name||'')}"></label>
+        <label class="field-label">Descrição<textarea class="field-control" name="description" maxlength="2000">${esc(data.description||'')}</textarea></label>
+        <label class="field-label">Segmento<input class="field-control" name="segment" maxlength="160" value="${esc(data.segment||'')}"></label>
+        <label class="field-label">Regiões (uma por linha)<textarea class="field-control" name="regions">${esc((data.regions||[]).join('\n'))}</textarea></label>
+        <label class="field-label">Horário<input class="field-control" name="hours" maxlength="1000" value="${esc(data.hours||'')}"></label>
+        <label class="field-label">Políticas (uma por linha)<textarea class="field-control" name="policies">${esc((data.policies||[]).join('\n'))}</textarea></label>
+        <label class="field-label">Contato<input class="field-control" name="contact" maxlength="300" value="${esc(data.contact||'')}"></label>
+        <label class="field-label">Observações<textarea class="field-control" name="notes" maxlength="4000">${esc(data.notes||'')}</textarea></label>
+        <div class="form-actions"><button class="button button-secondary" type="button" data-close-modal>Cancelar</button><button class="button button-primary" type="submit">Salvar perfil</button></div></form>`);
+      formSubmit(document.querySelector('#business-profile-form'),async fd=>{
+        await request('/business/profile',{method:'PUT',body:{
+          name:String(fd.get('name')),description:String(fd.get('description')),segment:String(fd.get('segment')),
+          regions:String(fd.get('regions')).split('\n').map(x=>x.trim()).filter(Boolean),
+          hours:String(fd.get('hours')),policies:String(fd.get('policies')).split('\n').map(x=>x.trim()).filter(Boolean),
+          contact:String(fd.get('contact')),notes:String(fd.get('notes'))}});
+        closeModal();toast('Perfil salvo.','success');render();
+      });
+    }
+    function productForm(item){
+      const data=item||{name:'',description:'',price_text:'',conditions:'',active:true};
+      openModal(item?'Editar produto':'Novo produto',`<form id="product-form">
+        <label class="field-label">Nome<input class="field-control" name="name" required maxlength="160" value="${esc(data.name)}"></label>
+        <label class="field-label">Preço (texto aprovado)<input class="field-control" name="price_text" maxlength="200" value="${esc(data.price_text)}"></label>
+        <label class="field-label">Condições<textarea class="field-control" name="conditions" maxlength="1000">${esc(data.conditions)}</textarea></label>
+        <label class="field-label">Descrição<textarea class="field-control" name="description" maxlength="2000">${esc(data.description)}</textarea></label>
+        <label class="check-line"><input type="checkbox" name="active" ${data.active?'checked':''}> Ativo</label>
+        <div class="form-actions"><button class="button button-secondary" type="button" data-close-modal>Cancelar</button><button class="button button-primary" type="submit">Salvar</button></div></form>`);
+      formSubmit(document.querySelector('#product-form'),async fd=>{
+        const body={name:String(fd.get('name')),price_text:String(fd.get('price_text')),conditions:String(fd.get('conditions')),description:String(fd.get('description')),active:fd.get('active')==='on'};
+        await request(item?`/business/products/${encodeURIComponent(item.id)}`:'/business/products',{method:item?'PATCH':'POST',body});
+        closeModal();toast('Produto salvo.','success');render();
+      });
+    }
+    function processForm(item){
+      const data=item||{name:'',description:'',steps:[],sla_text:'',active:true};
+      openModal(item?'Editar processo':'Novo processo',`<form id="process-form">
+        <label class="field-label">Nome<input class="field-control" name="name" required maxlength="160" value="${esc(data.name)}"></label>
+        <label class="field-label">Etapas (uma por linha)<textarea class="field-control" name="steps">${esc((data.steps||[]).join('\n'))}</textarea></label>
+        <label class="field-label">Prazo<input class="field-control" name="sla_text" maxlength="500" value="${esc(data.sla_text)}"></label>
+        <label class="field-label">Descrição<textarea class="field-control" name="description" maxlength="2000">${esc(data.description)}</textarea></label>
+        <label class="check-line"><input type="checkbox" name="active" ${data.active?'checked':''}> Ativo</label>
+        <div class="form-actions"><button class="button button-secondary" type="button" data-close-modal>Cancelar</button><button class="button button-primary" type="submit">Salvar</button></div></form>`);
+      formSubmit(document.querySelector('#process-form'),async fd=>{
+        const body={name:String(fd.get('name')),steps:String(fd.get('steps')).split('\n').map(x=>x.trim()).filter(Boolean),sla_text:String(fd.get('sla_text')),description:String(fd.get('description')),active:fd.get('active')==='on'};
+        await request(item?`/business/processes/${encodeURIComponent(item.id)}`:'/business/processes',{method:item?'PATCH':'POST',body});
+        closeModal();toast('Processo salvo.','success');render();
+      });
+    }
+    return {render};
+  }
+  window.OrchestraBusinessUI={create};
+})();
+```
+
+- [ ] **Step 3: Create UI test**
+
+Create `tests/ui/business-panel.cjs` following the local synthetic-server pattern of `tests/ui/conversation-panel.cjs`. Synthetic endpoints:
+
+```javascript
+else if(endpoint==='/business/profile')data={version:1,data:{name:'Empresa fictícia',description:'Descrição fictícia',hours:'9h às 18h'}};
+else if(endpoint==='/business/products')data=[{id:'product-1',name:'Produto fictício',price_text:'R$ 100',active:true}];
+else if(endpoint==='/business/processes')data=[{id:'process-1',name:'Processo fictício',steps:['a','b'],sla_text:'2 dias',active:true}];
+else if(endpoint==='/knowledge/documents')data=[{id:'doc-1',filename:'documento-ficticio.pdf',status:'pending_index'}];
+```
+
+Assertions:
+
+```javascript
+await page.locator('[data-route="business"]').click();
+assert.match(await page.locator('body').innerText(),/Produto fictício/);
+assert.match(await page.locator('body').innerText(),/documento-ficticio\.pdf/);
+await page.getByRole('button',{name:'Novo produto'}).click();
+await page.locator('#product-form [name="name"]').fill('Produto novo');
+await page.getByRole('button',{name:'Salvar'}).click();
+assert.equal(mutations.at(-1).endpoint,'/business/products');
+assert.equal(mutations.at(-1).body.name,'Produto novo');
+```
+
+- [ ] **Step 4: Run UI tests**
+
+Run: `node tests/ui/business-panel.cjs`
+Expected: PASS.
+
+Run: `node tests/ui/conversation-panel.cjs`
+Expected: PASS; rota nova não quebra o painel existente.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add frontend/index.html frontend/app.js frontend/business-ui.js tests/ui/business-panel.cjs
+git commit -m "Adiciona painel de negócio, catálogo e documentos"
 ```
 
 ---
