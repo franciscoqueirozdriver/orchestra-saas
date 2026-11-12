@@ -571,6 +571,7 @@ def test_visit_turn_passes_structured_output_validator_to_provider_router(runtim
 
 def test_core_global_humanized_delivery_applies_without_agent_profile_opt_in(runtime,monkeypatch):
     from app.models import Agent,Conversation,OutboxMessage,OutboxPart
+    from app.conversation.humanize import delivery_plan
     core(runtime,monkeypatch)
     scheduled=[]
     monkeypatch.setattr(runtime.tasks.dispatch_outbox,'apply_async',lambda *args,**kwargs:scheduled.append((args,kwargs)))
@@ -593,10 +594,11 @@ def test_core_global_humanized_delivery_applies_without_agent_profile_opt_in(run
         assert 1<len(parts)<=3
         assert ''.join(part.content for part in parts)==text
         assert all(len(part.content)<=300 for part in parts)
-        assert parent.delivery_config=={'delay':2,'presence':False}
+        plan=delivery_plan([part.content for part in parts],f'conversation-a:{revision}')
+        assert parent.delivery_config=={'part_delays':plan,'presence':False}
         parent_id=parent.id
     assert runtime.outbox.dispatch(parent_id)=='part_accepted'
-    assert scheduled[-1][1]['countdown']==2
+    assert scheduled[-1][1]['countdown']==plan[1]
 
 
 def test_core_humanized_overflow_pauses_and_escalates_without_partial_reply(runtime,monkeypatch):
