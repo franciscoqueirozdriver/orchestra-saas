@@ -218,6 +218,10 @@ class ConversationPolicyUpdate(BaseModel):
     consent_evidence: str = Field(default="", max_length=1000)
 
 
+class ConversationConsentUpdate(BaseModel):
+    evidence: str = Field(min_length=5, max_length=1000)
+
+
 class ConversationProfile(BaseModel):
     model_config = ConfigDict(extra='forbid')
     enabled: bool = False

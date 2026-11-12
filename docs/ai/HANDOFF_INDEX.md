@@ -14,6 +14,7 @@ não os transforma em retrato atual. Atualize-o ao adicionar handoffs relevantes
 | [`docs/handoff/2026-11-10-tentativa-sincronizacao.md`](../handoff/2026-11-10-tentativa-sincronizacao.md) | Tentativa inicial de publicação de `main`, quando GitHub/VPS estavam inacessíveis | Registro histórico, supersedido quanto ao estado atual pelo handoff de publicação abaixo |
 | [`docs/handoff/2026-11-10-publicacao-enrico.md`](../handoff/2026-11-10-publicacao-enrico.md) | Correção da divergência local/GitHub, CI, release na VPS, backup, schema e verificações pós-publicação | Registro do release `1f7d1a8`; saída global desativada; homologação de atendimento permanece pendente |
 | [`docs/handoff/2026-11-11-interpretacao-contextual-enrico.md`](../handoff/2026-11-11-interpretacao-contextual-enrico.md) | Interpretação semântica pelo modelo, preservação da resposta contextual e publicação | Release `cf2ed78` verificado na VPS; saída automática desativada; homologação com provedor real pendente |
+| [`docs/handoff/2026-11-11-controle-automacao-conversa.md`](../handoff/2026-11-11-controle-automacao-conversa.md) | Painel por conversa para diagnosticar e operar pausas globais, de conexão, agente, contato e outbox | Implementação local em `feat/automation-control-panel`; não testada em suíte, não publicada e não verificada na VPS |
 
 O handoff de 06/11 evoluiu em commits `d8d04b3`, `a07dc7d` e `621d926` (importação
 histórica), culminando no arquivo atual. Use `git show <commit>:<caminho>` se for

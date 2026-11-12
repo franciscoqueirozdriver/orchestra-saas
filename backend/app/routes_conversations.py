@@ -2,8 +2,10 @@ from fastapi import APIRouter, HTTPException
 
 from app.dependencies import CurrentUser, DbSession, TenantId
 from app.control import serialized_mutation
-from app.schemas import ConversationPolicyUpdate
-from app.models import Conversation, Message
+from app.schemas import ConversationConsentUpdate, ConversationPolicyUpdate
+from app.models import Agent, Conversation, Message, ModelRun, WebhookEvent, ZapiInstance
+from app.outbound_control import outbound_status
+from app.policy import sending_denial
 
 router = APIRouter(prefix="/api/conversations", tags=["conversas"])
 
@@ -14,7 +16,7 @@ def list_conversations(db: DbSession, tenant_id: TenantId) -> list[dict]:
     result = []
     for row in rows:
         last = db.query(Message).filter(Message.tenant_id == tenant_id, Message.conversation_id == row.id).order_by(Message.created_at.desc()).first()
-        result.append({"id": row.id, "contact_key": row.contact_key, "contact_name": row.contact_name, "history_only": row.history_only, "status": row.status, "pause_reason": row.pause_reason, "revision": row.revision, "last_message": last.content[:300] if last else "", "last_message_at": row.last_message_at.isoformat() if row.last_message_at else None})
+        result.append({"id": row.id, "contact_key": row.contact_key, "contact_name": row.contact_name, "history_only": row.history_only, "status": row.status, "pause_reason": row.pause_reason, "revision": row.revision, "last_direction": last.direction if last else None, "last_author_kind": last.author_kind if last else None, "last_message": last.content[:300] if last else "", "last_message_at": row.last_message_at.isoformat() if row.last_message_at else None})
     return result
 
 
@@ -45,6 +47,21 @@ def update_policy(conversation_id: str, payload: ConversationPolicyUpdate, db: D
     return {'id': row.id, 'status': row.status, 'consent_status': row.consent_status, 'opted_out': row.opted_out}
 
 
+@router.post("/{conversation_id}/consent")
+def record_contact_consent(conversation_id: str, payload: ConversationConsentUpdate, db: DbSession, tenant_id: TenantId, user: CurrentUser):
+    if user.role not in {'platform_admin', 'tenant_admin'}:
+        raise HTTPException(status_code=403, detail='Ação restrita a administradores')
+    evidence=payload.evidence.strip()
+    if len(evidence)<5:
+        raise HTTPException(status_code=422,detail='Registre evidência suficiente da nova autorização')
+    with tenant_guard(tenant_id):
+        db.expire_all();row=_conversation(db,tenant_id,conversation_id)
+        row.consent_status='granted';row.consent_evidence=evidence;row.opted_out=False
+        invalidate(db,row,'contact_consent_updated')
+        db.commit()
+    return {'id':row.id,'status':row.status,'consent_status':row.consent_status,'opted_out':row.opted_out,'revision':row.revision}
+
+
 from app.schemas import ConversationActionRequest, ConversationSendRequest
 from app.models import ConversationAction, OutboxMessage, OutboxPart, ZapiInstance
 from app.locks import tenant_guard
@@ -70,8 +87,49 @@ def _state(row):
 @router.get('/{conversation_id}/state')
 def conversation_state(conversation_id: str, db: DbSession, tenant_id: TenantId):
     row=_conversation(db,tenant_id,conversation_id)
+    instance=db.query(ZapiInstance).filter_by(id=row.instance_id,tenant_id=tenant_id).first()
+    agent=db.query(Agent).filter_by(id=instance.agent_id,tenant_id=tenant_id).first() if instance and instance.agent_id else None
+    last_message=db.query(Message).filter_by(tenant_id=tenant_id,conversation_id=row.id).order_by(Message.created_at.desc(),Message.id.desc()).first()
+    last_event=db.query(WebhookEvent).filter_by(tenant_id=tenant_id,instance_id=row.instance_id,event_key=last_message.external_id,event_type='ReceivedCallback').first() if last_message and last_message.external_id else None
+    last_run=db.query(ModelRun).filter_by(tenant_id=tenant_id,conversation_id=row.id).order_by(ModelRun.created_at.desc(),ModelRun.id.desc()).first()
     pending=db.query(OutboxMessage).filter_by(tenant_id=tenant_id,conversation_id=row.id).order_by(OutboxMessage.created_at.desc()).limit(20).all()
-    return {**_state(row),'outbox':[{'id':p.id,'status':p.status,'last_error':p.last_error,
+    denial=sending_denial(instance,row)
+    global_control=outbound_status()
+    if not global_control['enabled']:
+        global_block='global_outbound_disabled'
+    else:
+        global_block=None
+    if not instance or not instance.is_active:
+        connection_block='connection_inactive'
+    elif instance.status!='connected':
+        connection_block='connection_disconnected'
+    elif not instance.sending_enabled:
+        connection_block='connection_sending_paused'
+    elif not instance.webhook_configured:
+        connection_block='webhook_not_configured'
+    else:
+        connection_block=None
+    if not instance or not instance.agent_id:
+        agent_block='agent_unassigned'
+    elif not agent or not agent.enabled:
+        agent_block='agent_disabled'
+    elif not agent.auto_reply_enabled:
+        agent_block='auto_reply_disabled'
+    else:
+        agent_block=None
+    blockers=[x for x in (global_block,connection_block,agent_block,denial) if x]
+    processing={'webhook':{'processed':last_event.processed,'attempts':last_event.attempts,'error':last_event.processing_error,'received_at':last_event.received_at.isoformat()} if last_event else None,
+                'model':{'status':last_run.status,'attempts':[{'provider':a.get('provider'),'model':a.get('model'),'result':a.get('result'),'http_status':a.get('http_status')} for a in (last_run.attempts or []) if isinstance(a,dict)]} if last_run else None}
+    return {**_state(row),
+            'controls':{'global':global_control,
+                'connection':{'id':instance.id,'label':instance.label,'active':instance.is_active,'status':instance.status,'sending_enabled':instance.sending_enabled,'webhook_configured':instance.webhook_configured} if instance else None,
+                'agent':{'id':agent.id,'name':agent.name,'enabled':agent.enabled,'auto_reply_enabled':agent.auto_reply_enabled} if agent else None,
+                'policy_denial':denial,'blockers':list(dict.fromkeys(blockers)),
+                'last_incoming_at':row.last_incoming_at.isoformat() if row.last_incoming_at else None,
+                'last_message_direction':last_message.direction if last_message else None,
+                'last_message_author':last_message.author_kind if last_message else None,
+                'processing':processing},
+            'outbox':[{'id':p.id,'status':p.status,'last_error':p.last_error,
             'parts':[{'ordinal':part.ordinal,'status':part.status} for part in db.query(OutboxPart).filter_by(tenant_id=tenant_id,outbox_id=p.id).order_by(OutboxPart.ordinal)]} for p in pending]}
 
 

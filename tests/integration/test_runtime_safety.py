@@ -227,6 +227,59 @@ def test_global_pause_keeps_work_pending_without_external_effect(runtime, monkey
         assert db.get(OutboxMessage, row_id).status == 'pending'
 
 
+def test_conversation_control_panel_reports_each_scope_and_last_event(runtime, api, monkeypatch):
+    from app.models import Message, ModelRun, WebhookEvent
+    monkeypatch.setattr('app.routes_conversations.outbound_status', lambda: {'enabled': True, 'source': 'painel', 'environment_default': False})
+    with runtime.db() as db:
+        db.add(Message(tenant_id='tenant-a',conversation_id='conversation-a',external_id='synthetic-control-event',direction='outgoing',kind='text',content='synthetic',status='sent',author_kind='operator'))
+        db.add(WebhookEvent(tenant_id='tenant-a',instance_id='instance-a',event_key='synthetic-control-event',event_type='ReceivedCallback',payload={'fromMe':True},processed=True,attempts=1))
+        db.add(ModelRun(tenant_id='tenant-a',conversation_id='conversation-a',agent_id='agent-a',revision=1,context_snapshot_encrypted='test-only-encrypted',context_hash='test-only-hash',attempts=[{'provider':'synthetic-provider','model':'synthetic-model','result':'unavailable','context_hash':'must-not-be-returned'}],status='exhausted'))
+        db.commit()
+    result=api.get('/api/conversations/conversation-a/state')
+    assert result.status_code==200
+    body=result.json()
+    assert body['controls']['global']['enabled'] is True
+    assert body['controls']['connection']['sending_enabled'] is True
+    assert body['controls']['agent']['auto_reply_enabled'] is True
+    assert body['controls']['last_message_direction']=='outgoing'
+    assert body['controls']['last_message_author']=='operator'
+    assert body['controls']['processing']['webhook']['processed'] is True
+    assert body['controls']['processing']['model']['status']=='exhausted'
+    assert body['controls']['processing']['model']['attempts']==[{'provider':'synthetic-provider','model':'synthetic-model','result':'unavailable','http_status':None}]
+    assert api.get('/api/conversations/not-this-tenant/state').status_code==404
+
+
+def test_record_new_contact_consent_preserves_pause_and_invalidates_queued_reply(runtime, api):
+    from app.models import Conversation, OutboxMessage
+    row_id=queue(runtime)
+    with runtime.db() as db:
+        conversation=db.get(Conversation,'conversation-a')
+        conversation.status='human';conversation.pause_reason='external_takeover';conversation.opted_out=True;conversation.consent_status='denied';conversation.revision=8
+        db.commit()
+    result=api.post('/api/conversations/conversation-a/consent',json={'evidence':'Customer re-authorized by phone at 10:15'})
+    assert result.status_code==200
+    body=result.json()
+    assert body['status']=='human'
+    assert body['consent_status']=='granted'
+    assert body['opted_out'] is False
+    assert body['revision']==9
+    with runtime.db() as db:
+        conversation=db.get(Conversation,'conversation-a')
+        assert conversation.status=='human'
+        assert conversation.pause_reason=='external_takeover'
+        assert db.get(OutboxMessage,row_id).status=='cancelled'
+
+
+def test_record_contact_consent_requires_admin_and_nonblank_evidence(runtime, api):
+    from app.main import app
+    from app.dependencies import get_current_user
+    app.dependency_overrides[get_current_user]=lambda: SimpleNamespace(role='operator',tenant_id='tenant-a',id='synthetic-operator')
+    assert api.post('/api/conversations/conversation-a/consent',json={'evidence':'Nova autorização'}).status_code==403
+    app.dependency_overrides[get_current_user]=lambda: SimpleNamespace(role='tenant_admin',tenant_id='tenant-a',id='synthetic-admin')
+    assert api.post('/api/conversations/conversation-a/consent',json={'evidence':'    '}).status_code==422
+    app.dependency_overrides.clear()
+
+
 @pytest.fixture
 def api(runtime):
     from fastapi.testclient import TestClient

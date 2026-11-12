@@ -31,7 +31,7 @@ const server = http.createServer((req,res)=>{
     else if(endpoint==='/agents/synthetic-agent/conversation-policy'){
       if(request.method()==='PUT')profile=request.postDataJSON();data=profile;
     }else if(endpoint==='/conversations')data=[{id:'synthetic-conversation',contact_name:'Contato fictício',last_message:'Pergunta fictícia'}];
-    else if(endpoint==='/conversations/synthetic-conversation/state')data={id:'synthetic-conversation',revision,status,pause_reason:status==='human'?'takeover':null,outbox:[]};
+    else if(endpoint==='/conversations/synthetic-conversation/state')data={id:'synthetic-conversation',revision,status,pause_reason:status==='human'?'external_takeover':null,consent_status:'unknown',opted_out:false,controls:{global:{enabled:true,source:'painel'},connection:{id:'synthetic-connection',label:'Conexão sintética',active:true,status:'connected',sending_enabled:true,webhook_configured:true},agent:{id:'synthetic-agent',name:'Agente fictício',enabled:true,auto_reply_enabled:true},policy_denial:'consent_required',blockers:['consent_required'],last_message_direction:'outgoing',last_message_author:'operator',processing:{webhook:{processed:true,attempts:1,error:null},model:{status:'exhausted',attempts:[{provider:'provedor sintético',result:'unavailable'}]}}},outbox:[]};
     else if(endpoint==='/conversations/synthetic-conversation/messages'){
       if(request.method()==='POST'){
         if(rejectSend){rejectSend=false;return route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({detail:'Conversa alterada: erro fictício visível'})});}
@@ -59,6 +59,13 @@ const server = http.createServer((req,res)=>{
   await page.waitForFunction(()=>!document.querySelector('#modal').open);
   assert.equal(profile.enabled,true);assert.equal(profile.visit_booking_enabled,true);assert.equal(profile.tone,'formal');assert.equal(profile.humanized_delivery,false);assert.equal(profile.humanized_max_parts,3);
   await page.locator('[data-route="conversations"]').click();await page.locator('[data-conversation]').click();
+  await page.getByRole('button',{name:'Controle da automação'}).click();
+  assert.match(await page.locator('#modal-body').innerText(),/Envio global/);
+  assert.match(await page.locator('#modal-body').innerText(),/Última mensagem registrada: enviada pela equipe \(equipe\)/);
+  assert.match(await page.locator('#modal-body').innerText(),/Modelo: exhausted/);
+  assert.equal(await page.locator('#modal-body [data-control-global]').count(),1);
+  assert.equal(await page.locator('#modal-body [data-control-resume]').count(),0);
+  await page.locator('#modal [data-close-modal]').click();
   await page.getByRole('button',{name:'Assumir',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('#message-title').textContent.includes('human'));
   await page.getByRole('button',{name:'Responder',exact:true}).click();
