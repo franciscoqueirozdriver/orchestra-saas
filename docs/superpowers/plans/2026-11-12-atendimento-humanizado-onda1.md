@@ -579,6 +579,8 @@ def should_replace(existing, captured_at):
 
 
 def record_facts(db, *, tenant_id, contact_key, facts, message_id, captured_at, source='auto_extraction', confidence=0.7):
+    if not message_id:
+        return
     for fact_key, value in (facts or {}).items():
         if not isinstance(value, str) or not value.strip():
             continue
@@ -611,6 +613,7 @@ def memory_context(db, *, tenant_id, contact_key, now=None, limit=8):
                     MemoryItem.contact_key == contact_key,
                     MemoryItem.approved.is_(True),
                     MemoryItem.source_message_id.isnot(None),
+                    MemoryItem.source_message_id != '',
                     (MemoryItem.expires_at.is_(None)) | (MemoryItem.expires_at > now))
             .order_by(MemoryItem.last_seen_at.desc().nullslast(), MemoryItem.created_at.desc())
             .limit(limit).all())
@@ -917,10 +920,11 @@ def _apply_conversation_memory(db, tenant_id, conversation_id, revision, decisio
         latest_incoming = (db.query(Message)
                            .filter_by(tenant_id=tenant_id, conversation_id=conversation_id, direction='incoming')
                            .order_by(Message.created_at.desc(), Message.id.desc()).first())
-        record_facts(db, tenant_id=tenant_id, contact_key=conversation.contact_key,
-                     facts=decision.get('facts') or {},
-                     message_id=(latest_incoming.external_id or latest_incoming.id) if latest_incoming else '',
-                     captured_at=captured_at)
+        if latest_incoming:
+            record_facts(db, tenant_id=tenant_id, contact_key=conversation.contact_key,
+                         facts=decision.get('facts') or {},
+                         message_id=latest_incoming.external_id or latest_incoming.id,
+                         captured_at=captured_at)
         conversation.context_state = state
         db.commit()
         return True
