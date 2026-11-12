@@ -229,7 +229,7 @@ class ConversationProfile(BaseModel):
     conciseness: str = Field(default='balanced', pattern=r'^(short|balanced|detailed)$')
     emojis: str = Field(default='none', pattern=r'^(none|sparing)$')
     vocabulary: list[str] = Field(default_factory=list, max_length=20)
-    examples: list[str] = Field(default_factory=list, max_length=3)
+    examples: list[str] = Field(default_factory=list, max_length=8)
     # Business capability is agent-specific; shared language and delivery rules are global.
     visit_booking_enabled: bool = False
     context_minutes: int = Field(default=60, ge=5, le=1440)
@@ -242,6 +242,17 @@ class ConversationProfile(BaseModel):
     humanized_max_chars: int = Field(default=300, ge=180, le=300)
     humanized_max_parts: int = Field(default=3, ge=1, le=3)
     humanized_delay_seconds: int = Field(default=2, ge=1, le=5)
+    formality: int = Field(default=3, ge=0, le=10)
+    empathy: int = Field(default=7, ge=0, le=10)
+    humor: int = Field(default=3, ge=0, le=10)
+    objectivity: int = Field(default=7, ge=0, le=10)
+    proactivity: int = Field(default=5, ge=0, le=10)
+    max_lines: int = Field(default=4, ge=1, le=8)
+    forbidden_phrases: list[str] = Field(default_factory=list, max_length=10)
+    adaptive_style: bool = True
+    memory_enabled: bool = False
+    structured_decision_enabled: bool = False
+    presence_enabled: bool = False
 
     @model_validator(mode='after')
     def valid_humanized_sizes(self):
@@ -249,7 +260,7 @@ class ConversationProfile(BaseModel):
             raise ValueError('O tamanho-alvo não pode superar o tamanho máximo')
         return self
 
-    @field_validator('vocabulary','examples')
+    @field_validator('vocabulary','examples','forbidden_phrases')
     @classmethod
     def bounded_style(cls, values):
         if any(not v.strip() or len(v)>1000 for v in values):

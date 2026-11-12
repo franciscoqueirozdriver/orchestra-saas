@@ -1,5 +1,6 @@
 from datetime import datetime,timedelta,timezone
 import pytest
+from pydantic import ValidationError
 from app.conversation.behavior import command,wait_remaining,transition,split_reply,split_reply_conversational,output_guard,style_instructions
 from app.schemas import ConversationProfile
 
@@ -241,3 +242,26 @@ def test_provider_adapters_keep_presence_disabled_and_send_part_contract(adapter
     receipt=adapter.send_text('synthetic-contact','Parte sintética.')
     assert receipt.message_id=='synthetic-provider-receipt'
     assert adapter.composing('synthetic-contact') is False
+
+
+def test_persona_dimensions_are_bounded_and_reach_instructions():
+    profile = ConversationProfile(
+        enabled=True, formality=9, empathy=5, humor=0, objectivity=8,
+        proactivity=2, max_lines=3, forbidden_phrases=['claro!', 'com certeza'],
+        adaptive_style=True, structured_decision_enabled=True, memory_enabled=True,
+    )
+    text = style_instructions(profile, {'mode': 'request', 'recent_openings': ['Bom dia!']})
+    assert 'formalidade 9/10' in text
+    assert 'objetividade 8/10' in text
+    assert 'máximo 3 linhas' in text
+    assert 'claro!' in text
+    assert 'Bom dia!' in text
+    assert ConversationProfile().formality == 3
+    assert ConversationProfile().structured_decision_enabled is False
+
+
+def test_persona_rejects_out_of_range_values():
+    with pytest.raises(ValidationError):
+        ConversationProfile(formality=11)
+    with pytest.raises(ValidationError):
+        ConversationProfile(forbidden_phrases=['x'] * 11)
