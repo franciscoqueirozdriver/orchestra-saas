@@ -205,3 +205,26 @@ def test_stale_handoff_never_mutates_conversation(runtime):
         assert conversation.status == 'open'
         assert db.query(InterventionRequest).count() == 0
         assert db.query(OutboxMessage).count() == 0
+
+
+def test_summary_updates_context_without_changing_revision(runtime, monkeypatch):
+    from app.models import Conversation
+
+    _enable(runtime, memory_enabled=True)
+    for index in range(8):
+        _add_incoming(runtime, f'mensagem {index}')
+    monkeypatch.setattr(runtime.tasks, 'complete', lambda *a, **k: 'Resumo fictício do atendimento.')
+    result = runtime.tasks.summarize_conversation.run('tenant-a', 'conversation-a', 1)
+    assert result == 'summarized'
+    with runtime.db() as db:
+        conversation = db.get(Conversation, 'conversation-a')
+        assert conversation.context_state['summary'] == 'Resumo fictício do atendimento.'
+        assert conversation.context_state['summary_cursor']
+        assert conversation.revision == 1
+
+
+def test_summary_is_skipped_when_revision_is_stale(runtime, monkeypatch):
+    _enable(runtime, memory_enabled=True)
+    monkeypatch.setattr(runtime.tasks, 'complete', lambda *a, **k: 'não deveria ser chamado')
+    result = runtime.tasks.summarize_conversation.run('tenant-a', 'conversation-a', 2)
+    assert result == 'stale'

@@ -13,7 +13,7 @@ from app.config import settings
 from app.database import SessionLocal
 from app.embedding_client import embed_texts
 from app.embedding_config import knowledge_embedding_config
-from app.llm_client import LLMError
+from app.llm_client import LLMError, complete
 from app.locks import tenant_guard, advisory_guard
 from app.model_router import generate_with_fallback, candidate_configs
 from app.outbound_control import outbound_is_enabled
@@ -26,7 +26,7 @@ from app.models import OutboxPart, ConversationTurn
 from app.conversation.service import profile_for, invalidate, action
 from app.conversation.behavior import command, wait_remaining, transition, style_instructions, output_guard, split_reply_conversational, aware, is_clarification, CLARIFICATION_LIMIT_REPLY, merge_sales_context, sales_context_instructions, visit_response_contract, parse_visit_response, apply_sales_interpretation, opportunity_ready_for_team, needs_unverified_visit_handoff, redact_contact_numbers
 from app.conversation.decision import parse_decision_envelope, clean_visit, state_patch, contract_instructions
-from app.conversation.memory import memory_context, record_facts
+from app.conversation.memory import memory_context, record_facts, summary_prompt
 from app.conversation.humanize import delivery_plan, should_wait, remember_opening
 from app.conversation.business import business_context
 
@@ -611,6 +611,11 @@ def respond_to_conversation(tenant_id, conversation_id, expected_revision):
                             tenant_id, conversation_id, len(parts), [len(part) for part in parts])
                 enqueue(db, instance, conversation, answer, revision=expected_revision,
                         parts=parts, delivery_config=delivery_config)
+                if profile.memory_enabled:
+                    try:
+                        summarize_conversation.apply_async(args=[tenant_id, conversation_id, expected_revision], countdown=5)
+                    except Exception:
+                        logger.warning('Resumo conversacional não agendado; recuperação manual necessária')
                 return 'reply_queued'
         except ValueError:
             logger.warning('Geração não concluída (invalid_output)')
@@ -622,6 +627,62 @@ def respond_to_conversation(tenant_id, conversation_id, expected_revision):
             return _escalate_after_automation_failure(db,tenant_id,conversation_id,expected_revision,reason)
         finally:
             db.close()
+
+
+@celery_app.task(name='app.tasks.summarize_conversation', bind=True, max_retries=3, default_retry_delay=60)
+def summarize_conversation(self, tenant_id, conversation_id, revision):
+    db = SessionLocal()
+    try:
+        conversation = db.query(Conversation).filter_by(id=conversation_id, tenant_id=tenant_id).first()
+        if not conversation:
+            return 'missing'
+        instance = db.query(ZapiInstance).filter_by(id=conversation.instance_id, tenant_id=tenant_id).first()
+        agent = db.query(Agent).filter_by(id=instance.agent_id, tenant_id=tenant_id).first() if instance and instance.agent_id else None
+        profile = profile_for(agent)
+        if not agent or not profile.memory_enabled:
+            return 'disabled'
+        if revision != conversation.revision or conversation.status != 'open' or conversation.opted_out:
+            return 'stale'
+        state = dict(conversation.context_state or {})
+        query = db.query(Message).filter_by(tenant_id=tenant_id, conversation_id=conversation_id).order_by(Message.created_at, Message.id)
+        cursor = state.get('summary_cursor')
+        if cursor:
+            query = query.filter(Message.created_at > datetime.fromisoformat(cursor))
+        messages = query.limit(40).all()
+        if len(messages) < 8:
+            return 'insufficient'
+        prompt = summary_prompt([{'direction': m.direction, 'content': m.content} for m in messages],
+                                state.get('summary') or '')
+        text = ''
+        for config in candidate_configs(db, agent):
+            cooldown = config.cooldown_until
+            if cooldown and aware(cooldown) > datetime.now(timezone.utc):
+                continue
+            try:
+                text = complete(config.provider, config.base_url, config.model,
+                                decrypt_secret(config.api_key_encrypted) or '',
+                                'Você resume conversas de atendimento sem inventar fatos.',
+                                [{'role': 'user', 'content': prompt}],
+                                protocol=config.protocol, max_output_tokens=400)
+                if text and text.strip():
+                    break
+            except LLMError:
+                continue
+        if not text.strip():
+            return 'unavailable'
+        with tenant_guard(tenant_id):
+            db.expire_all()
+            conversation = db.query(Conversation).filter_by(id=conversation_id, tenant_id=tenant_id).first()
+            if not conversation or conversation.revision != revision or conversation.status != 'open' or conversation.opted_out:
+                return 'stale'
+            state = dict(conversation.context_state or {})
+            state['summary'] = text.strip()[:600]
+            state['summary_cursor'] = aware(messages[-1].created_at).isoformat()
+            conversation.context_state = state
+            db.commit()
+        return 'summarized'
+    finally:
+        db.close()
 
 
 def _process_operational_event(db, event):
