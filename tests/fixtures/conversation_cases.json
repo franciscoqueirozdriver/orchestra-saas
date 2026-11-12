@@ -159,5 +159,282 @@
     "incoming": "Agora quero o endereço",
     "mode": "new_request",
     "command": null
+  },
+  {
+    "id": "greeting_and_request",
+    "previous": {},
+    "incoming": "Bom dia, queria um orçamento",
+    "mode": "request",
+    "command": null
+  },
+  {
+    "id": "correction_after_answer",
+    "previous": {
+      "request": "Horário"
+    },
+    "incoming": "Não foi isso, quero o endereço",
+    "mode": "correction",
+    "command": null
+  },
+  {
+    "id": "correction_variant",
+    "previous": {
+      "request": "Horário"
+    },
+    "incoming": "Você não entendeu",
+    "mode": "correction",
+    "command": null
+  },
+  {
+    "id": "correction_variant_2",
+    "previous": {
+      "request": "Horário"
+    },
+    "incoming": "Não era isso",
+    "mode": "correction",
+    "command": null
+  },
+  {
+    "id": "lateral_subject",
+    "previous": {
+      "request": "Horário"
+    },
+    "incoming": "Mudando de assunto, vocês parcelam?",
+    "mode": "new_request",
+    "command": null
+  },
+  {
+    "id": "follow_up_city",
+    "previous": {
+      "request": "Orçamento em Campinas"
+    },
+    "incoming": "E os de amanhã?",
+    "mode": "follow_up",
+    "command": null
+  },
+  {
+    "id": "follow_up_value",
+    "previous": {
+      "request": "Orçamento"
+    },
+    "incoming": "E o valor?",
+    "mode": "follow_up",
+    "command": null
+  },
+  {
+    "id": "follow_up_tomorrow",
+    "previous": {
+      "request": "Horários"
+    },
+    "incoming": "E para amanhã?",
+    "mode": "follow_up",
+    "command": null
+  },
+  {
+    "id": "negation_with_request",
+    "previous": {
+      "request": "Horário"
+    },
+    "incoming": "Não, quero o endereço",
+    "mode": "new_request",
+    "command": null
+  },
+  {
+    "id": "no_more",
+    "previous": {
+      "request": "Horário"
+    },
+    "incoming": "Não quero mais nada, obrigado",
+    "mode": "new_request",
+    "command": null
+  },
+  {
+    "id": "human_with_request",
+    "previous": {},
+    "incoming": "Quero falar com uma pessoa, mas antes me diga o preço",
+    "mode": "request",
+    "command": null
+  },
+  {
+    "id": "human_synonym",
+    "previous": {},
+    "incoming": "Preciso de um atendente",
+    "mode": "request",
+    "command": "human"
+  },
+  {
+    "id": "cancel_variant",
+    "previous": {},
+    "incoming": "Cancelar",
+    "mode": "request",
+    "command": "cancel"
+  },
+  {
+    "id": "cancel_variant_2",
+    "previous": {},
+    "incoming": "Cancela isso",
+    "mode": "request",
+    "command": "cancel"
+  },
+  {
+    "id": "opt_out_parar",
+    "previous": {},
+    "incoming": "Parar",
+    "mode": "opt_out",
+    "command": null
+  },
+  {
+    "id": "fragments_three",
+    "previous": {},
+    "incoming": "Oi\nqueria saber\nvocês parcelam?",
+    "mode": "request",
+    "command": null
+  },
+  {
+    "id": "ack_wait",
+    "previous": {
+      "request": "Registrei sua visita."
+    },
+    "incoming": "ok",
+    "mode": "request",
+    "command": null,
+    "pending": [],
+    "last_assistant": "Registrei sua visita.",
+    "expect": "wait"
+  },
+  {
+    "id": "ack_after_question",
+    "previous": {
+      "request": "Qual o bairro?"
+    },
+    "incoming": "ok",
+    "mode": "request",
+    "command": null,
+    "pending": [
+      "bairro"
+    ],
+    "last_assistant": "Qual o bairro?",
+    "expect": "reply"
+  },
+  {
+    "id": "emoji_wait",
+    "previous": {
+      "request": "Combinado."
+    },
+    "incoming": "👍",
+    "mode": "request",
+    "command": null,
+    "pending": [],
+    "last_assistant": "Combinado.",
+    "expect": "wait"
+  },
+  {
+    "id": "valeu_wait",
+    "previous": {
+      "request": "Registrei."
+    },
+    "incoming": "valeu",
+    "mode": "request",
+    "command": null,
+    "pending": [],
+    "last_assistant": "Registrei.",
+    "expect": "wait"
+  },
+  {
+    "id": "beleza_reply_after_question",
+    "previous": {
+      "request": "Qual o bairro?"
+    },
+    "incoming": "beleza",
+    "mode": "request",
+    "command": null,
+    "pending": [
+      "bairro"
+    ],
+    "last_assistant": "Qual o bairro?",
+    "expect": "reply"
+  },
+  {
+    "id": "short_yes",
+    "previous": {
+      "request": "Qual o bairro?"
+    },
+    "incoming": "Sim",
+    "mode": "follow_up",
+    "command": null
+  },
+  {
+    "id": "short_pode",
+    "previous": {
+      "request": "Qual o bairro?"
+    },
+    "incoming": "Pode",
+    "mode": "follow_up",
+    "command": null
+  },
+  {
+    "id": "address_question",
+    "previous": {
+      "request": "Orçamento"
+    },
+    "incoming": "Qual o endereço?",
+    "mode": "request",
+    "command": null
+  },
+  {
+    "id": "price_question",
+    "previous": {},
+    "incoming": "Quanto custa?",
+    "mode": "request",
+    "command": null
+  },
+  {
+    "id": "church_question",
+    "previous": {},
+    "incoming": "Vocês atendem igreja?",
+    "mode": "request",
+    "command": null
+  },
+  {
+    "id": "receiver_self",
+    "previous": {},
+    "incoming": "Sou eu mesmo que vou receber",
+    "mode": "request",
+    "command": null
+  },
+  {
+    "id": "receiver_other",
+    "previous": {},
+    "incoming": "Outra pessoa vai receber",
+    "mode": "request",
+    "command": null
+  },
+  {
+    "id": "name_explicit",
+    "previous": {},
+    "incoming": "Meu nome é Ana",
+    "mode": "request",
+    "command": null
+  },
+  {
+    "id": "address_explicit",
+    "previous": {},
+    "incoming": "Moro na Rua das Flores, 100",
+    "mode": "request",
+    "command": null
+  },
+  {
+    "id": "phone_explicit",
+    "previous": {},
+    "incoming": "Meu telefone é fictício",
+    "mode": "request",
+    "command": null
+  },
+  {
+    "id": "schedule_question",
+    "previous": {},
+    "incoming": "Pode ser na quinta?",
+    "mode": "request",
+    "command": null
   }
 ]
