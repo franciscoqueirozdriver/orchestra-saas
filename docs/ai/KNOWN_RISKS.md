@@ -45,3 +45,18 @@ e `MEDIA_DIR` temporário. Isso valida os cenários simulados no checkout local,
 homologa WAME/Z-API nem demonstra o estado da VPS. A suíte não elimina a limitação de
 cancelamento de chamadas externas já iniciadas nem resolve associação de contato
 ambígua.
+
+## Revisão local do núcleo conversacional — 2026-11-12
+
+Na branch local `test/conversational-core-onda1`, o resumo agora pagina por
+`(created_at, id)`, para não ignorar mensagens com timestamps iguais. Cursors antigos
+sem ID reprocessam a mensagem de fronteira (`created_at >= cursor`), o que pode
+duplicar contexto no resumo, mas evita perder mensagens empatadas. A rota de exclusão
+de memória agora exige administrador para itens `kind='business'` e continua filtrando
+por tenant. Os testes desta revisão são locais e não indicam que essas mudanças estejam
+na `main`, no GitHub ou na VPS.
+
+A avaliação de respostas adicionada nesta branch usa somente casos sintéticos e rubrica
+de revisão humana. Seus testes validam estrutura e ausência de identificadores de
+contato; não pontuam respostas de Gemini ou de outro LLM. A qualidade conversacional,
+o resumo com modelo real e a configuração operacional ainda exigem avaliação separada.

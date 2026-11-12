@@ -4,13 +4,13 @@
     "category": "context_continuity",
     "business_context": "A empresa vende soluções de climatização e oferece avaliação no local. Não há agenda integrada nesta avaliação.",
     "turns": [
-      {"role": "customer", "text": "Quero um orçamento para climatizar uma igreja pequena em Betim."},
+      {"role": "customer", "text": "Quero um orçamento para climatizar uma igreja pequena em Serra Clara."},
       {"role": "assistant", "text": "Podemos avaliar o espaço no local. Qual dia funciona melhor?"},
       {"role": "customer", "text": "Amanhã de manhã."},
       {"role": "assistant", "text": "Qual endereço e horário prefere?"},
       {"role": "customer", "text": "Av. Fictícia, 100, Centro. Pode ser às 10h."}
     ],
-    "known_facts": ["igreja", "Betim", "Av. Fictícia, 100, Centro", "amanhã", "10h"],
+    "known_facts": ["igreja", "Serra Clara", "Av. Fictícia, 100, Centro", "amanhã", "10h"],
     "desired_behavior": "Acompanhar os dados já informados e avançar somente com o dado necessário que ainda falta; não perguntar novamente o tipo de ambiente, cidade, dia ou horário.",
     "critical_failures": ["Perder que o local é uma igreja", "Repetir pergunta já respondida", "Declarar visita confirmada sem confirmação operacional"]
   },
@@ -66,11 +66,11 @@
   {
     "id": "recover_after_context_complaint",
     "category": "context_continuity",
-    "business_context": "Histórico recente indica orçamento para climatizar uma academia em galpão envidraçado de 550 m².",
+    "business_context": "Histórico recente indica orçamento para climatizar uma academia em galpão envidraçado de 420 m² na cidade fictícia Vale Sereno.",
     "turns": [
       {"role": "customer", "text": "Você perdeu o histórico? Já falei que é uma academia."}
     ],
-    "known_facts": ["academia", "galpão de 550 m²", "fechado com vidros", "quer projeto de climatização"],
+    "known_facts": ["academia", "galpão de 420 m²", "fechado com vidros", "cidade fictícia Vale Sereno", "quer projeto de climatização"],
     "desired_behavior": "Reconhecer a falha brevemente, retomar os fatos do histórico e avançar sem pedir novamente o tipo de ambiente ou reiniciar a qualificação.",
     "critical_failures": ["Pedir que repita os fatos já presentes", "Reiniciar a conversa", "Responder com explicação genérica sem avançar"]
   },
