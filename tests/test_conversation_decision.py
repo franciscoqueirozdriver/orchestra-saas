@@ -51,6 +51,29 @@ def test_visit_block_is_optional_but_validated_when_present():
     assert good['receiver_confirmation'] == 'customer'
 
 
+def test_rejects_unhashable_or_non_list_decision_fields():
+    assert parse_decision_envelope(_envelope(intent=['pedido'])) is None
+    assert parse_decision_envelope(_envelope(intent={'valor': 'pedido'})) is None
+    assert parse_decision_envelope(_envelope(sentiment=['neutro'])) is None
+    assert parse_decision_envelope(_envelope(action={'valor': 'respond'})) is None
+    assert parse_decision_envelope(_envelope(pending=3)) is None
+    assert parse_decision_envelope(_envelope(pending=True)) is None
+    assert parse_decision_envelope(_envelope(pending='confirmar bairro')) is None
+
+
+def test_rejects_non_dict_json_values():
+    for raw in ('[]', 'null', '"str"', '42', 'true'):
+        assert parse_decision_envelope(raw) is None
+
+
+def test_clean_visit_rejects_non_string_fields():
+    base = {'channel_confirmation': 'use_current', 'receiver_confirmation': 'customer',
+            'next_required_field': 'city'}
+    assert clean_visit({**base, 'channel_confirmation': ['use_current']}) is None
+    assert clean_visit({**base, 'receiver_confirmation': {'valor': 'customer'}}) is None
+    assert clean_visit({**base, 'next_required_field': ['city']}) is None
+
+
 def test_contract_mentions_visit_only_when_needed():
     assert 'visit' in contract_instructions(True)
     assert 'visit' not in contract_instructions(False)

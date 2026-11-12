@@ -38,6 +38,8 @@ def parse_decision_envelope(value):
     if not isinstance(decision, dict):
         return None
     intent, sentiment, action = decision.get('intent'), decision.get('sentiment'), decision.get('action')
+    if not all(isinstance(item, str) for item in (intent, sentiment, action)):
+        return None
     if intent not in INTENTS or sentiment not in SENTIMENTS or action not in ACTIONS:
         return None
     facts = {}
@@ -46,7 +48,12 @@ def parse_decision_envelope(value):
         for key, item in raw_facts.items():
             if key in FACT_KEYS and isinstance(item, str) and 0 < len(item.strip()) <= 300:
                 facts[key] = item.strip()
-    pending = [item.strip()[:200] for item in (decision.get('pending') or [])
+    raw_pending = decision.get('pending')
+    if raw_pending is None:
+        raw_pending = []
+    elif not isinstance(raw_pending, list):
+        return None
+    pending = [item.strip()[:200] for item in raw_pending
                if isinstance(item, str) and item.strip()][:10]
     clean = {
         'intent': intent, 'sentiment': sentiment, 'action': action,
@@ -66,8 +73,11 @@ def clean_visit(value):
     clean = {}
     for key, allowed in VISIT_FIELDS.items():
         item = value.get(key)
-        if item in allowed:
-            clean[key] = item
+        if item is None:
+            continue
+        if not isinstance(item, str) or item not in allowed:
+            return None
+        clean[key] = item
     if len(clean) != len(VISIT_FIELDS):
         return None
     name = value.get('receiver_name')
