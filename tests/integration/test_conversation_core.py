@@ -228,3 +228,29 @@ def test_summary_is_skipped_when_revision_is_stale(runtime, monkeypatch):
     monkeypatch.setattr(runtime.tasks, 'complete', lambda *a, **k: 'não deveria ser chamado')
     result = runtime.tasks.summarize_conversation.run('tenant-a', 'conversation-a', 2)
     assert result == 'stale'
+
+
+def test_memory_and_decision_routes_never_cross_tenants(runtime):
+    from fastapi import HTTPException
+
+    from app import routes_memory
+    from app.models import MemoryItem
+    from app.schemas import MemoryUpdate
+
+    with runtime.db() as db:
+        db.add(MemoryItem(id='memory-a', tenant_id='tenant-a', contact_key='synthetic-contact',
+                          kind='note', content='fato do tenant A'))
+        db.commit()
+        calls = (
+            lambda: routes_memory.read_memory('conversation-a', db=db, tenant_id='tenant-b'),
+            lambda: routes_memory.read_decision('conversation-a', db=db, tenant_id='tenant-b'),
+            lambda: routes_memory.update_memory('memory-a', payload=MemoryUpdate(approved=True),
+                                                db=db, tenant_id='tenant-b', user=runtime.admin),
+            lambda: routes_memory.delete_memory('memory-a', db=db, tenant_id='tenant-b',
+                                                user=runtime.admin),
+        )
+        for call in calls:
+            with pytest.raises(HTTPException) as failure:
+                call()
+            assert failure.value.status_code == 404
+        assert db.get(MemoryItem, 'memory-a') is not None

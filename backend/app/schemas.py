@@ -1,3 +1,4 @@
+from datetime import datetime
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
@@ -144,6 +145,12 @@ class MemoryCreate(BaseModel):
     contact_key: str = Field(min_length=3, max_length=180)
     content: str = Field(min_length=1, max_length=3000)
     expires_at: str | None = None
+
+
+class MemoryUpdate(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    approved: bool | None = None
+    expires_at: datetime | None = None
 
 
 class AgentRead(BaseModel):
