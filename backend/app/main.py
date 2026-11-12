@@ -7,6 +7,7 @@ from app.config import settings
 from app.middleware import MaxBodySizeMiddleware
 from app.routes_agents import router as agents_router
 from app.routes_auth import router as auth_router
+from app.routes_business import router as business_router
 from app.routes_conversations import router as conversations_router
 from app.routes_knowledge import router as knowledge_router
 from app.routes_llm import router as llm_router
@@ -42,5 +43,5 @@ def api_health() -> JSONResponse:
     return JSONResponse({"ok": True, "service": "orquestra-api"})
 
 
-for router in (auth_router, tenants_router, agents_router, zapi_router, conversations_router, llm_router, knowledge_router, users_router, settings_router):
+for router in (auth_router, tenants_router, agents_router, business_router, zapi_router, conversations_router, llm_router, knowledge_router, users_router, settings_router):
     app.include_router(router)

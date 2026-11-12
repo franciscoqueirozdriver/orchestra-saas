@@ -47,9 +47,46 @@ class Agent(Base):
     llm_config_id: Mapped[str | None] = mapped_column(ForeignKey("llm_configs.id", ondelete="SET NULL"), index=True)
     fallback_config_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
     conversation_profile: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    business_override: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
     system_prompt: Mapped[str] = mapped_column(Text, nullable=False, default="")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     auto_reply_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class BusinessProfile(Base):
+    __tablename__ = "business_profiles"
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    data: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class BusinessProduct(Base):
+    __tablename__ = "business_products"
+    __table_args__ = (Index("ix_business_products_tenant_active", "tenant_id", "active"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    price_text: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    conditions: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class BusinessProcess(Base):
+    __tablename__ = "business_processes"
+    __table_args__ = (Index("ix_business_processes_tenant_active", "tenant_id", "active"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    steps: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
+    sla_text: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 

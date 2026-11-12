@@ -299,3 +299,47 @@ class KnowledgeSearchUpsert(BaseModel):
     @classmethod
     def validate_key(cls,value):
         return value.strip() or None if value is not None else None
+
+
+class BusinessProfileUpdate(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    name: str = Field(default='', max_length=160)
+    description: str = Field(default='', max_length=2000)
+    segment: str = Field(default='', max_length=160)
+    regions: list[str] = Field(default_factory=list, max_length=30)
+    hours: str = Field(default='', max_length=1000)
+    policies: list[str] = Field(default_factory=list, max_length=30)
+    contact: str = Field(default='', max_length=300)
+    notes: str = Field(default='', max_length=4000)
+
+    @field_validator('regions', 'policies')
+    @classmethod
+    def bounded_lists(cls, values):
+        if any(not v.strip() or len(v) > 500 for v in values):
+            raise ValueError('Itens de negócio precisam ter de 1 a 500 caracteres')
+        return [v.strip() for v in values]
+
+
+class BusinessProductWrite(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    name: str = Field(min_length=1, max_length=160)
+    description: str = Field(default='', max_length=2000)
+    price_text: str = Field(default='', max_length=200)
+    conditions: str = Field(default='', max_length=1000)
+    active: bool = True
+
+
+class BusinessProcessWrite(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    name: str = Field(min_length=1, max_length=160)
+    description: str = Field(default='', max_length=2000)
+    steps: list[str] = Field(default_factory=list, max_length=30)
+    sla_text: str = Field(default='', max_length=500)
+    active: bool = True
+
+    @field_validator('steps')
+    @classmethod
+    def bounded_steps(cls, values):
+        if any(not v.strip() or len(v) > 500 for v in values):
+            raise ValueError('Etapas precisam ter de 1 a 500 caracteres')
+        return [v.strip() for v in values]
