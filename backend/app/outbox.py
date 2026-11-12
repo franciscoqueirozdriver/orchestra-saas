@@ -6,6 +6,7 @@ import time
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from app.config import settings
+from app.conversation.humanize import part_delay
 from app.database import SessionLocal
 from app.locks import tenant_guard
 from app.models import Agent, Conversation, Message, OutboxMessage, OutboxPart, ZapiInstance
@@ -154,7 +155,7 @@ def dispatch(outbox_id):
             conversation.last_message_at = datetime.now(timezone.utc)
             if parts:
                 aggregate(db,row)
-                if row.status=='pending':row.next_attempt_at=datetime.now(timezone.utc)+timedelta(seconds=int(row.delivery_config.get('delay',1)))
+                if row.status=='pending':row.next_attempt_at=datetime.now(timezone.utc)+timedelta(seconds=part_delay(row.delivery_config, part.ordinal + 1))
             db.commit()
             if part:
                 created_at = row.created_at
@@ -163,7 +164,7 @@ def dispatch(outbox_id):
                 total_ms = int(max(0, (datetime.now(timezone.utc) - created_at).total_seconds() * 1000)) if created_at else 0
                 logger.info('outbox_part_result tenant=%s outbox=%s provider=%s part=%s/%s state=accepted delay_seconds=%s elapsed_ms=%s',
                             row.tenant_id, row.id, instance.provider, part.ordinal + 1,
-                            len(parts), int(row.delivery_config.get('delay', 1)),
+                            len(parts), part_delay(row.delivery_config, part.ordinal + 1),
                             int((time.monotonic() - dispatch_started) * 1000))
                 logger.info('outbox_delivery_progress tenant=%s outbox=%s provider=%s accepted_parts=%s total_parts=%s total_elapsed_ms=%s',
                             row.tenant_id, row.id, instance.provider, part.ordinal + 1,
@@ -171,7 +172,7 @@ def dispatch(outbox_id):
             if parts and row.status=='pending':
                 try:
                     from app.tasks import dispatch_outbox
-                    dispatch_outbox.apply_async(args=[row.id],countdown=int(row.delivery_config.get('delay',1)))
+                    dispatch_outbox.apply_async(args=[row.id],countdown=part_delay(row.delivery_config, part.ordinal + 1))
                 except Exception:logger.warning('Parte persistida; recuperação periódica necessária')
             return 'part_accepted' if parts and row.status=='pending' else 'accepted'
     finally:

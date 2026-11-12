@@ -5,6 +5,16 @@ import httpx
 import pytest
 from app.policy import advance_status, is_opt_out, sending_denial
 from app.llm_client import _provider_error
+from app.conversation.humanize import part_delay
+
+
+def test_part_delay_clamps_and_falls_back_for_outbox_scheduling():
+    # Hostile or model-provided values must never produce a negative or runaway delay.
+    assert part_delay({'part_delays': [-5, 90]}, 0) == 0.0
+    assert part_delay({'part_delays': [-5, 90]}, 1) == 60.0
+    # The outbox schedules the next part with ordinal + 1; the final part has no
+    # matching plan slot and must fall back to the legacy delay.
+    assert part_delay({'part_delays': [1.2, 2.7], 'delay': 3}, 2) == 3.0
 
 
 def test_opt_out_is_explicit_and_not_a_cancellation_of_a_question():
