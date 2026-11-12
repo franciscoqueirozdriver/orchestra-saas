@@ -912,7 +912,7 @@ git commit -m "Adiciona contrato estruturado de decisão conversacional"
 - Create: `backend/migrations/versions/0012_conversation_memory.py`
 - Create: `backend/app/conversation/memory.py`
 - Test: `tests/test_conversation_memory.py`
-- Test: `tests/integration/test_memory_repository.py`
+- Test: `tests/integration/test_conversation_memory_db.py`
 
 **Interfaces:**
 - Consumes: `MemoryItem`, `_extract_sales_facts` de `behavior`.
@@ -1136,7 +1136,7 @@ def summary_prompt(messages, previous):
 
 - [ ] **Step 6: Add integration test for the write/read invariants**
 
-Create `tests/integration/test_memory_repository.py`:
+Create `tests/integration/test_conversation_memory_db.py`:
 
 ```python
 from datetime import datetime, timedelta, timezone
@@ -1222,7 +1222,7 @@ Expected: `0012_conversation_memory` aplicada sem erro.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add backend/app/models.py backend/migrations/versions/0012_conversation_memory.py backend/app/conversation/memory.py tests/test_conversation_memory.py tests/integration/test_memory_repository.py
+git add backend/app/models.py backend/migrations/versions/0012_conversation_memory.py backend/app/conversation/memory.py tests/test_conversation_memory.py tests/integration/test_conversation_memory_db.py
 git commit -m "Adiciona memória conversacional com proveniência"
 ```
 
