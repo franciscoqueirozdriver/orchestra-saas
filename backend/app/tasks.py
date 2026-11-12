@@ -68,9 +68,18 @@ def _ensure_checkpointer_schema(checkpointer):
     _checkpointer_ready = True
 
 
-def _graph_response(db, agent, conversation, instructions, history, thread_id, revision):
+def _validate_visit_response_contract(value):
+    reply, interpretation = parse_visit_response(value)
+    if not reply or not interpretation:
+        raise LLMError("Resposta incompatível com o contrato de visita", category="invalid_response")
+
+
+def _graph_response(db, agent, conversation, instructions, history, thread_id, revision, response_validator=None):
     def draft(state):
-        return {'response': generate_with_fallback(db, agent, conversation, state['instructions'], state['history'], revision=revision)}
+        return {'response': generate_with_fallback(
+            db, agent, conversation, state['instructions'], state['history'], revision=revision,
+            response_validator=response_validator,
+        )}
     builder = StateGraph(AgentState)
     builder.add_node('draft', draft)
     builder.add_edge(START, 'draft')
@@ -421,8 +430,10 @@ def respond_to_conversation(tenant_id, conversation_id, expected_revision):
             # Never hold the tenant policy lock over inference/embedding calls.
             instructions, history = _build_context(db, agent, conversation, configs, expected_revision)
             sales_context=(conversation.context_state or {}).get('sales_context') or {} if profile.visit_booking_enabled else {}
+            response_validator = _validate_visit_response_contract if profile.visit_booking_enabled else None
             answer = _graph_response(db, agent, conversation, instructions, history,
-                                     f'tenant:{tenant_id}:conversation:{conversation_id}', expected_revision)
+                                     f'tenant:{tenant_id}:conversation:{conversation_id}', expected_revision,
+                                     response_validator)
             interpretation={}
             if profile.visit_booking_enabled:
                 answer,interpretation=parse_visit_response(answer)
@@ -497,7 +508,9 @@ def respond_to_conversation(tenant_id, conversation_id, expected_revision):
             return _escalate_after_automation_failure(db,tenant_id,conversation_id,expected_revision,'resposta inválida da automação')
         except LLMError as exc:
             logger.warning('Geração não concluída (%s)', exc.category)
-            return _escalate_after_automation_failure(db,tenant_id,conversation_id,expected_revision,'falha do provedor de IA')
+            reason = ('resposta estruturada inválida do modelo' if exc.category == 'invalid_response'
+                      else 'falha do provedor de IA')
+            return _escalate_after_automation_failure(db,tenant_id,conversation_id,expected_revision,reason)
         finally:
             db.close()
 
