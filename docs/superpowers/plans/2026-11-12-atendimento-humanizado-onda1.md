@@ -912,6 +912,7 @@ git commit -m "Adiciona contrato estruturado de decisão conversacional"
 - Create: `backend/migrations/versions/0012_conversation_memory.py`
 - Create: `backend/app/conversation/memory.py`
 - Test: `tests/test_conversation_memory.py`
+- Test: `tests/integration/test_memory_repository.py`
 
 **Interfaces:**
 - Consumes: `MemoryItem`, `_extract_sales_facts` de `behavior`.
@@ -1099,6 +1100,8 @@ def record_facts(db, *, tenant_id, contact_key, facts, message_id, captured_at, 
         else:
             existing.content = value.strip()[:1000]
             existing.source_message_id = str(message_id or '')[:220]
+            existing.source = source
+            existing.approved = kind in AUTO_KINDS
             existing.confidence = confidence
             existing.last_seen_at = captured_at
             existing.expires_at = expires
@@ -1131,7 +1134,84 @@ def summary_prompt(messages, previous):
             '\n\nMensagens novas:\n' + '\n'.join(lines))
 ```
 
-- [ ] **Step 6: Run tests and migration check**
+- [ ] **Step 6: Add integration test for the write/read invariants**
+
+Create `tests/integration/test_memory_repository.py`:
+
+```python
+from datetime import datetime, timedelta, timezone
+
+from app.conversation.memory import memory_context, record_facts
+from app.models import MemoryItem
+
+NOW = datetime.now(timezone.utc)
+
+
+def test_deterministic_outranks_semantic_and_stays_deterministic(runtime):
+    with runtime.db() as db:
+        record_facts(db, tenant_id='tenant-a', contact_key='c1',
+                     facts={'preference': 'semântico'}, message_id='m1',
+                     captured_at=NOW - timedelta(minutes=3),
+                     source='auto_extraction', confidence=0.7)
+        db.commit()
+        record_facts(db, tenant_id='tenant-a', contact_key='c1',
+                     facts={'preference': 'explícito'}, message_id='m2',
+                     captured_at=NOW - timedelta(minutes=2),
+                     source='deterministic', confidence=1.0)
+        db.commit()
+        record_facts(db, tenant_id='tenant-a', contact_key='c1',
+                     facts={'preference': 'semântico novo'}, message_id='m3',
+                     captured_at=NOW - timedelta(minutes=1),
+                     source='auto_extraction', confidence=0.7)
+        db.commit()
+        row = db.query(MemoryItem).filter_by(tenant_id='tenant-a', contact_key='c1').one()
+        assert row.content == 'explícito'
+        assert row.source == 'deterministic'
+
+
+def test_memory_context_is_tenant_scoped_approved_unexpired_and_provenanced(runtime):
+    with runtime.db() as db:
+        db.add_all([
+            MemoryItem(tenant_id='tenant-a', contact_key='c1', kind='preference',
+                       fact_key='preference', content='válido', approved=True,
+                       source='deterministic', source_message_id='m1',
+                       created_at=NOW, last_seen_at=NOW, expires_at=NOW + timedelta(days=1)),
+            MemoryItem(tenant_id='tenant-a', contact_key='c1', kind='preference',
+                       fact_key='preference2', content='sem origem', approved=True,
+                       source='deterministic', source_message_id='',
+                       created_at=NOW, last_seen_at=NOW, expires_at=NOW + timedelta(days=1)),
+            MemoryItem(tenant_id='tenant-a', contact_key='c1', kind='preference',
+                       fact_key='preference3', content='não aprovado', approved=False,
+                       source='auto_extraction', source_message_id='m2',
+                       created_at=NOW, last_seen_at=NOW),
+            MemoryItem(tenant_id='tenant-a', contact_key='c1', kind='preference',
+                       fact_key='preference4', content='vencido', approved=True,
+                       source='deterministic', source_message_id='m3',
+                       created_at=NOW, last_seen_at=NOW, expires_at=NOW - timedelta(days=1)),
+            MemoryItem(tenant_id='tenant-b', contact_key='c1', kind='preference',
+                       fact_key='preference', content='outra empresa', approved=True,
+                       source='deterministic', source_message_id='m4',
+                       created_at=NOW, last_seen_at=NOW),
+        ])
+        db.commit()
+        text = memory_context(db, tenant_id='tenant-a', contact_key='c1', now=NOW)
+    assert 'válido' in text
+    for excluded in ('sem origem', 'não aprovado', 'vencido', 'outra empresa'):
+        assert excluded not in text
+
+
+def test_record_facts_refuses_missing_provenance(runtime):
+    with runtime.db() as db:
+        record_facts(db, tenant_id='tenant-a', contact_key='c1',
+                     facts={'preference': 'x'}, message_id='',
+                     captured_at=NOW)
+        db.commit()
+        assert db.query(MemoryItem).filter_by(tenant_id='tenant-a', contact_key='c1').count() == 0
+```
+
+Run with the disposable DB URL and network from the Global Constraints. Expected: PASS.
+
+- [ ] **Step 7: Run tests and migration check**
 
 Run: `pytest tests/test_conversation_memory.py -q`
 Expected: PASS.
@@ -1139,10 +1219,10 @@ Expected: PASS.
 Run: `cd backend && alembic upgrade head`
 Expected: `0012_conversation_memory` aplicada sem erro.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add backend/app/models.py backend/migrations/versions/0012_conversation_memory.py backend/app/conversation/memory.py tests/test_conversation_memory.py
+git add backend/app/models.py backend/migrations/versions/0012_conversation_memory.py backend/app/conversation/memory.py tests/test_conversation_memory.py tests/integration/test_memory_repository.py
 git commit -m "Adiciona memória conversacional com proveniência"
 ```
 
