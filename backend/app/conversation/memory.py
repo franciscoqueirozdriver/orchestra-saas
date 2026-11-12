@@ -58,6 +58,8 @@ def record_facts(db, *, tenant_id, contact_key, facts, message_id, captured_at, 
                               confidence=confidence, last_seen_at=captured_at, expires_at=expires))
         else:
             existing.content = value.strip()[:1000]
+            existing.source = source
+            existing.approved = kind in AUTO_KINDS
             existing.source_message_id = str(message_id or '')[:220]
             existing.confidence = confidence
             existing.last_seen_at = captured_at
