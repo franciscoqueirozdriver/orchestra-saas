@@ -209,7 +209,7 @@ def _extract_sales_facts(text):
     if phone:
         digits=re.sub(r'\D','',phone)
         if len(digits) in {10,11,12,13} and (len(digits)<=11 or digits.startswith('55')):facts['alternate_phone']=digits
-    name=re.search(r'\b(?:meu nome [ée]|me chamo|sou o|sou a)\s+([A-ZÀ-ÖØ-Þ][\wÀ-ÿ\'-]*(?:\s+[A-ZÀ-ÖØ-Þ][\wÀ-ÿ\'-]*){0,2})',raw)
+    name=re.search(r'\b(?i:meu nome é|meu nome e|me chamo|sou o|sou a)\s+([A-ZÀ-ÖØ-Þ][\wÀ-ÿ\'-]*(?:\s+[A-ZÀ-ÖØ-Þ][\wÀ-ÿ\'-]*){0,2})',raw)
     if name and normalize(name.group(1)) not in {'responsavel','pastor','cliente'}:facts['interlocutor_name']=name.group(1)[:120]
     elif re.search(r'\beu mesmo[, ]+|\beu mesma[, ]+',raw,re.I):
         named=re.search(r'\beu mesm[oa][, ]+([A-ZÀ-ÖØ-Þ][\wÀ-ÿ\'-]*(?:\s+[A-ZÀ-ÖØ-Þ][\wÀ-ÿ\'-]*){0,2})',raw,re.I)

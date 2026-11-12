@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 import uuid
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, DateTime, ForeignKey, ForeignKeyConstraint, Index, Integer, JSON, String, Text, UniqueConstraint, func, text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, ForeignKeyConstraint, Index, Integer, JSON, String, Text, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -268,6 +268,7 @@ class KnowledgeChunk(Base):
 
 class MemoryItem(Base):
     __tablename__ = "memory_items"
+    __table_args__ = (Index('ix_memory_tenant_contact_kind', 'tenant_id', 'contact_key', 'kind'),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     contact_key: Mapped[str] = mapped_column(String(180), nullable=False, index=True)
@@ -275,6 +276,11 @@ class MemoryItem(Base):
     approved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default='false')
     source: Mapped[str] = mapped_column(String(80), nullable=False, default="operator")
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    kind: Mapped[str] = mapped_column(String(24), nullable=False, default='note', server_default='note')
+    fact_key: Mapped[str | None] = mapped_column(String(120))
+    source_message_id: Mapped[str | None] = mapped_column(String(220))
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0, server_default='1.0')
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
