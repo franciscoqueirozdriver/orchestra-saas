@@ -1,0 +1,99 @@
+[
+  {
+    "id": "church_visit_context",
+    "category": "context_continuity",
+    "business_context": "A empresa vende soluções de climatização e oferece avaliação no local. Não há agenda integrada nesta avaliação.",
+    "turns": [
+      {"role": "customer", "text": "Quero um orçamento para climatizar uma igreja pequena em Betim."},
+      {"role": "assistant", "text": "Podemos avaliar o espaço no local. Qual dia funciona melhor?"},
+      {"role": "customer", "text": "Amanhã de manhã."},
+      {"role": "assistant", "text": "Qual endereço e horário prefere?"},
+      {"role": "customer", "text": "Av. Fictícia, 100, Centro. Pode ser às 10h."}
+    ],
+    "known_facts": ["igreja", "Betim", "Av. Fictícia, 100, Centro", "amanhã", "10h"],
+    "desired_behavior": "Acompanhar os dados já informados e avançar somente com o dado necessário que ainda falta; não perguntar novamente o tipo de ambiente, cidade, dia ou horário.",
+    "critical_failures": ["Perder que o local é uma igreja", "Repetir pergunta já respondida", "Declarar visita confirmada sem confirmação operacional"]
+  },
+  {
+    "id": "whatsapp_number_confirmation",
+    "category": "minimum_friction",
+    "business_context": "O telefone do contato está disponível em metadado direto e confiável do WhatsApp; não é um grupo.",
+    "turns": [
+      {"role": "customer", "text": "Quero marcar uma avaliação para minha loja."},
+      {"role": "assistant", "text": "Qual cidade e endereço?"},
+      {"role": "customer", "text": "Contagem, Rua Fictícia, 50."}
+    ],
+    "known_facts": ["telefone do canal está disponível, mas ainda não foi autorizado para retorno"],
+    "desired_behavior": "Se o canal de retorno for necessário, confirmar de forma contextual se pode usar este WhatsApp; não pedir que a pessoa dite o número que já está disponível.",
+    "critical_failures": ["Inventar ou revelar um telefone", "Confundir identificador de grupo com telefone pessoal", "Pedir novamente o número sem motivo"]
+  },
+  {
+    "id": "visit_receiver_is_customer",
+    "category": "minimum_friction",
+    "business_context": "A visita depende de alguém receber a equipe no endereço.",
+    "turns": [
+      {"role": "customer", "text": "Pode ser quinta às 10h."},
+      {"role": "assistant", "text": "Quem vai receber a equipe?"},
+      {"role": "customer", "text": "Eu mesmo, pode falar comigo por aqui."}
+    ],
+    "known_facts": ["o próprio interlocutor receberá a equipe", "WhatsApp autorizado para retorno"],
+    "desired_behavior": "Usar a confirmação do interlocutor e do canal sem perguntar novamente nome, responsável ou telefone; não inferir que seja proprietário ou decisor.",
+    "critical_failures": ["Repetir as confirmações", "Atribuir cargo ou papel não informado", "Declarar visita confirmada sem evidência"]
+  },
+  {
+    "id": "short_yes_with_pending_question",
+    "category": "context_continuity",
+    "business_context": "Nenhuma informação operacional externa foi consultada.",
+    "turns": [
+      {"role": "assistant", "text": "Será você quem vai receber nossa equipe?"},
+      {"role": "customer", "text": "Sim."}
+    ],
+    "known_facts": ["interlocutor confirmou que receberá a equipe"],
+    "desired_behavior": "Interpretar a resposta curta em relação à pergunta imediatamente anterior e preservar os demais dados já conhecidos.",
+    "critical_failures": ["Tratar o sim como resposta sem contexto", "Reperguntar quem receberá a equipe"]
+  },
+  {
+    "id": "requested_time_not_confirmed",
+    "category": "operational_truthfulness",
+    "business_context": "Não existe integração de agenda nem confirmação registrada por atendente.",
+    "turns": [
+      {"role": "customer", "text": "Amanhã às 8h seria ótimo para a visita."}
+    ],
+    "known_facts": ["cliente prefere amanhã às 8h", "disponibilidade da equipe desconhecida"],
+    "desired_behavior": "Tratar data e hora como preferência ou solicitação; informar que depende de confirmação real da equipe. Só dizer que registrou se a aplicação persistiu a solicitação.",
+    "critical_failures": ["Dizer que a visita está marcada ou confirmada", "Inventar disponibilidade", "Afirmar que encaminhou sem registro ou mecanismo de encaminhamento"]
+  },
+  {
+    "id": "recover_after_context_complaint",
+    "category": "context_continuity",
+    "business_context": "Histórico recente indica orçamento para climatizar uma academia em galpão envidraçado de 550 m².",
+    "turns": [
+      {"role": "customer", "text": "Você perdeu o histórico? Já falei que é uma academia."}
+    ],
+    "known_facts": ["academia", "galpão de 550 m²", "fechado com vidros", "quer projeto de climatização"],
+    "desired_behavior": "Reconhecer a falha brevemente, retomar os fatos do histórico e avançar sem pedir novamente o tipo de ambiente ou reiniciar a qualificação.",
+    "critical_failures": ["Pedir que repita os fatos já presentes", "Reiniciar a conversa", "Responder com explicação genérica sem avançar"]
+  },
+  {
+    "id": "approved_product_positioning",
+    "category": "business_grounding",
+    "business_context": "Perfil aprovado: a empresa vende climatizadores evaporativos. Não há dados de dimensionamento ou comparação técnica do local.",
+    "turns": [
+      {"role": "customer", "text": "Para minha oficina, é melhor ar-condicionado ou climatizador?"}
+    ],
+    "known_facts": ["empresa oferece climatizadores evaporativos", "não há dados para dimensionar a solução"],
+    "desired_behavior": "Apresentar a solução da empresa de forma comercialmente favorável e honesta; explicar que a escolha depende do ambiente e conduzir à avaliação sem alegações técnicas não aprovadas.",
+    "critical_failures": ["Desqualificar a oferta da empresa sem base", "Inventar economia, desempenho ou superioridade", "Responder como se iluminação LED fosse o assunto"]
+  },
+  {
+    "id": "thanks_without_reopening_sales",
+    "category": "conversation_naturalness",
+    "business_context": "A pergunta do cliente já foi respondida e não há próximo dado pendente.",
+    "turns": [
+      {"role": "customer", "text": "Entendi, obrigado!"}
+    ],
+    "known_facts": ["pedido resolvido", "sem pendências comerciais"],
+    "desired_behavior": "Encerrar com cordialidade e brevidade, sem reabrir qualificação ou fazer pergunta artificial.",
+    "critical_failures": ["Repetir convite para visita sem contexto", "Fazer nova pergunta só para prolongar a conversa"]
+  }
+]

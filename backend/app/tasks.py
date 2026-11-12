@@ -7,7 +7,7 @@ from typing import TypedDict
 from celery import Celery
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import END, START, StateGraph
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 
 from app.config import settings
 from app.database import SessionLocal
@@ -647,10 +647,23 @@ def summarize_conversation(self, tenant_id, conversation_id, revision):
         query = db.query(Message).filter_by(tenant_id=tenant_id, conversation_id=conversation_id).order_by(Message.created_at, Message.id)
         cursor = state.get('summary_cursor')
         if cursor:
-            query = query.filter(Message.created_at > datetime.fromisoformat(cursor))
+            cursor_at = aware(datetime.fromisoformat(cursor))
+            cursor_id = state.get('summary_cursor_id')
+            if cursor_id:
+                query = query.filter(or_(Message.created_at > cursor_at,
+                                         and_(Message.created_at == cursor_at, Message.id > cursor_id)))
+            else:
+                # Reprocess the boundary for legacy timestamp-only cursors. This
+                # can repeat one summarized message, but avoids permanently skipping
+                # messages that shared the old cursor timestamp.
+                query = query.filter(Message.created_at >= cursor_at)
         messages = query.limit(40).all()
         if len(messages) < 8:
             return 'insufficient'
+        # Capture the cursor before the provider call and expire_all(); a concurrent
+        # deletion must not make the cursor depend on reloading an ORM instance.
+        next_cursor = aware(messages[-1].created_at).isoformat()
+        next_cursor_id = messages[-1].id
         prompt = summary_prompt([{'direction': m.direction, 'content': m.content} for m in messages],
                                 state.get('summary') or '')
         text = ''
@@ -677,7 +690,8 @@ def summarize_conversation(self, tenant_id, conversation_id, revision):
                 return 'stale'
             state = dict(conversation.context_state or {})
             state['summary'] = text.strip()[:600]
-            state['summary_cursor'] = aware(messages[-1].created_at).isoformat()
+            state['summary_cursor'] = next_cursor
+            state['summary_cursor_id'] = next_cursor_id
             conversation.context_state = state
             db.commit()
         return 'summarized'

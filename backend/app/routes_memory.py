@@ -30,6 +30,11 @@ def _conversation(db, tenant_id, identifier):
     return row
 
 
+def _require_admin(user):
+    if user.role not in {'platform_admin', 'tenant_admin'}:
+        raise HTTPException(403, detail='Ação restrita a administradores')
+
+
 @router.get('/conversations/{conversation_id}/memory')
 def read_memory(conversation_id: str, db: DbSession, tenant_id: TenantId):
     row = _conversation(db, tenant_id, conversation_id)
@@ -75,5 +80,7 @@ def delete_memory(memory_id: str, db: DbSession, tenant_id: TenantId, user: Curr
     row = db.query(MemoryItem).filter_by(tenant_id=tenant_id, id=memory_id).first()
     if not row:
         raise HTTPException(404, detail='Memória não encontrada')
+    if row.kind == 'business':
+        _require_admin(user)
     db.delete(row)
     db.commit()
