@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException
 from app.dependencies import CurrentUser, DbSession, TenantId
 from app.control import serialized_mutation
 from app.schemas import ConversationConsentUpdate, ConversationPolicyUpdate
-from app.models import Agent, Conversation, Message, ModelRun, WebhookEvent, ZapiInstance
+from app.models import Agent, Conversation, InterventionRequest, Message, ModelRun, WebhookEvent, ZapiInstance
 from app.outbound_control import outbound_status
 from app.policy import sending_denial
 
@@ -92,6 +92,7 @@ def conversation_state(conversation_id: str, db: DbSession, tenant_id: TenantId)
     last_message=db.query(Message).filter_by(tenant_id=tenant_id,conversation_id=row.id).order_by(Message.created_at.desc(),Message.id.desc()).first()
     last_event=db.query(WebhookEvent).filter_by(tenant_id=tenant_id,instance_id=row.instance_id,event_key=last_message.external_id,event_type='ReceivedCallback').first() if last_message and last_message.external_id else None
     last_run=db.query(ModelRun).filter_by(tenant_id=tenant_id,conversation_id=row.id).order_by(ModelRun.created_at.desc(),ModelRun.id.desc()).first()
+    last_intervention=db.query(InterventionRequest).filter_by(tenant_id=tenant_id,conversation_id=row.id).order_by(InterventionRequest.created_at.desc(),InterventionRequest.id.desc()).first()
     pending=db.query(OutboxMessage).filter_by(tenant_id=tenant_id,conversation_id=row.id).order_by(OutboxMessage.created_at.desc()).limit(20).all()
     denial=sending_denial(instance,row)
     global_control=outbound_status()
@@ -119,7 +120,8 @@ def conversation_state(conversation_id: str, db: DbSession, tenant_id: TenantId)
         agent_block=None
     blockers=[x for x in (global_block,connection_block,agent_block,denial) if x]
     processing={'webhook':{'processed':last_event.processed,'attempts':last_event.attempts,'error':last_event.processing_error,'received_at':last_event.received_at.isoformat()} if last_event else None,
-                'model':{'status':last_run.status,'attempts':[{'provider':a.get('provider'),'model':a.get('model'),'result':a.get('result'),'http_status':a.get('http_status')} for a in (last_run.attempts or []) if isinstance(a,dict)]} if last_run else None}
+                'model':{'status':last_run.status,'attempts':[{'provider':a.get('provider'),'model':a.get('model'),'result':a.get('result'),'http_status':a.get('http_status'),**({'failure_stage':a['failure_stage']} if a.get('failure_stage') else {})} for a in (last_run.attempts or []) if isinstance(a,dict)]} if last_run else None,
+                'intervention':{'reason':last_intervention.reason,'status':last_intervention.status,'notification_status':last_intervention.notification_status,'created_at':last_intervention.created_at.isoformat()} if last_intervention else None}
     return {**_state(row),
             'controls':{'global':global_control,
                 'connection':{'id':instance.id,'label':instance.label,'active':instance.is_active,'status':instance.status,'sending_enabled':instance.sending_enabled,'webhook_configured':instance.webhook_configured} if instance else None,

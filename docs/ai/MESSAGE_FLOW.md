@@ -27,6 +27,27 @@ Preferências do cliente nunca viram reserva confirmada. Quando os dados exigido
 
 Os testes usam mensagens, números e nomes sintéticos; os envelopes do modelo são simulados e não demonstram que um provedor real seguirá o formato nem interpretará corretamente toda formulação coloquial. Se o modelo não devolver o envelope semântico válido, o fluxo de visita falha fechado para intervenção, em vez de enviar JSON ou presumir consentimento. “Próxima quinta” é preservada como preferência textual; não é convertida para data absoluta sem fuso horário de negócio configurado. Histórico e resumo estruturado são complementares; o resumo expira pela política de contexto configurada.
 
+### Validação semântica antes de aceitar saída estruturada — branch local
+
+Para agentes com `visit_booking_enabled`, `tasks.py` passa um validador de contrato ao
+`generate_with_fallback` em `model_router.py`. O roteador verifica se cada resposta do
+provedor pode ser interpretada por `parse_visit_response` antes de persistir aquela
+tentativa como `succeeded`. Se a saída for texto comum, JSON malformado ou não cumprir
+os campos obrigatórios, a tentativa é registrada como `invalid_response` com
+`failure_stage=response_validation` e o próximo modelo configurado recebe exatamente o
+mesmo snapshot de contexto. Uma resposta bem formada segue para a aplicação normal da
+interpretação allowlist. Respostas em cache de revisões anteriores também são validadas
+antes de reutilização; um cache inválido não é enviado ao cliente.
+
+Se todas as conexões retornarem saída incompatível, a execução termina com erro
+`invalid_response`; o fluxo não envia o envelope bruto e aciona a intervenção existente
+com motivo específico. Agentes sem fluxo de visita continuam sem validador de JSON e
+preservam o contrato de texto legado. O painel de controle expõe o estágio de falha e a
+solicitação de intervenção mais recente, sem texto de conversa ou credenciais. Esta
+mudança foi implementada e testada localmente na branch `feat/semantic-llm-fallback`,
+base `465d6b3e`; não representa publicação nem homologação com Gemini, Groq ou outros
+provedores reais.
+
 ## Fragmentação humanizada — implementação local na branch
 
 Em toda resposta automática de WhatsApp, `tasks.py` usa `split_reply_conversational`

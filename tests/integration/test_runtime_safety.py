@@ -228,12 +228,13 @@ def test_global_pause_keeps_work_pending_without_external_effect(runtime, monkey
 
 
 def test_conversation_control_panel_reports_each_scope_and_last_event(runtime, api, monkeypatch):
-    from app.models import Message, ModelRun, WebhookEvent
+    from app.models import InterventionRequest, Message, ModelRun, WebhookEvent
     monkeypatch.setattr('app.routes_conversations.outbound_status', lambda: {'enabled': True, 'source': 'painel', 'environment_default': False})
     with runtime.db() as db:
         db.add(Message(tenant_id='tenant-a',conversation_id='conversation-a',external_id='synthetic-control-event',direction='outgoing',kind='text',content='synthetic',status='sent',author_kind='operator'))
         db.add(WebhookEvent(tenant_id='tenant-a',instance_id='instance-a',event_key='synthetic-control-event',event_type='ReceivedCallback',payload={'fromMe':True},processed=True,attempts=1))
-        db.add(ModelRun(tenant_id='tenant-a',conversation_id='conversation-a',agent_id='agent-a',revision=1,context_snapshot_encrypted='test-only-encrypted',context_hash='test-only-hash',attempts=[{'provider':'synthetic-provider','model':'synthetic-model','result':'unavailable','context_hash':'must-not-be-returned'}],status='exhausted'))
+        db.add(ModelRun(tenant_id='tenant-a',conversation_id='conversation-a',agent_id='agent-a',revision=1,context_snapshot_encrypted='test-only-encrypted',context_hash='test-only-hash',attempts=[{'provider':'synthetic-provider','model':'synthetic-model','result':'invalid_response','failure_stage':'response_validation','context_hash':'must-not-be-returned'}],status='exhausted'))
+        db.add(InterventionRequest(tenant_id='tenant-a',instance_id='instance-a',conversation_id='conversation-a',code='123456',reason='resposta estruturada inválida do modelo',status='awaiting_claim',notification_status='sent',expires_at=datetime.now(timezone.utc)+timedelta(minutes=5)))
         db.commit()
     result=api.get('/api/conversations/conversation-a/state')
     assert result.status_code==200
@@ -245,7 +246,9 @@ def test_conversation_control_panel_reports_each_scope_and_last_event(runtime, a
     assert body['controls']['last_message_author']=='operator'
     assert body['controls']['processing']['webhook']['processed'] is True
     assert body['controls']['processing']['model']['status']=='exhausted'
-    assert body['controls']['processing']['model']['attempts']==[{'provider':'synthetic-provider','model':'synthetic-model','result':'unavailable','http_status':None}]
+    assert body['controls']['processing']['model']['attempts']==[{'provider':'synthetic-provider','model':'synthetic-model','result':'invalid_response','http_status':None,'failure_stage':'response_validation'}]
+    assert body['controls']['processing']['intervention']['reason']=='resposta estruturada inválida do modelo'
+    assert body['controls']['processing']['intervention']['notification_status']=='sent'
     assert api.get('/api/conversations/not-this-tenant/state').status_code==404
 
 
@@ -438,6 +441,85 @@ def test_model_fallback_reuses_same_context_and_success_is_cached(runtime):
         assert exc.value.category == 'stale_context'
 
 
+def test_model_fallback_rejects_invalid_visit_envelope_before_accepting_provider(runtime):
+    from app.models import Agent, Conversation, LLMConfig, ModelRun
+    from app.security import encrypt_secret
+    from app.model_router import generate_with_fallback
+    from app.tasks import _validate_visit_response_contract
+    from app.llm_client import LLMError
+    valid = ('{"reply":"Vou encaminhar sua preferência para confirmação.",'
+             '"interpretation":{"channel_confirmation":"unknown",'
+             '"receiver_confirmation":"unknown","receiver_name":null,'
+             '"next_required_field":"receiver_confirmation"}}')
+    calls = []
+    def client(provider, base, model, key, instructions, history, **kwargs):
+        calls.append((model, instructions, list(history)))
+        return 'Resposta em texto sem o envelope exigido.' if model == 'synthetic' else valid
+    with runtime.db() as db:
+        db.add(LLMConfig(id='model-fallback', tenant_id='tenant-a', name='Fallback', provider='openai-compatible',
+                         base_url='https://provider.invalid/v1', model='synthetic-second', embedding_model='synthetic', api_key_encrypted=encrypt_secret('test-only-key')))
+        agent=db.get(Agent,'agent-a');agent.fallback_config_ids=['model-fallback'];db.commit()
+        conversation=db.get(Conversation,'conversation-a')
+        history=[{'role':'user','content':'Preferência sintética de visita'}]
+        result=generate_with_fallback(db,agent,conversation,'instruções sintéticas',history,client=client,
+                                      response_validator=_validate_visit_response_contract)
+        assert result==valid
+        assert [call[0] for call in calls]==['synthetic','synthetic-second']
+        assert calls[0][1:]==calls[1][1:]
+        run=db.query(ModelRun).one()
+        assert run.status=='succeeded'
+        assert [attempt['result'] for attempt in run.attempts]==['invalid_response','succeeded']
+        assert run.attempts[0]['failure_stage']=='response_validation'
+
+
+def test_all_models_with_invalid_visit_envelopes_fail_closed_with_diagnostic(runtime):
+    from app.models import Agent, Conversation, ModelRun
+    from app.model_router import generate_with_fallback
+    from app.tasks import _validate_visit_response_contract
+    from app.llm_client import LLMError
+    with runtime.db() as db:
+        agent=db.get(Agent,'agent-a');conversation=db.get(Conversation,'conversation-a')
+        with pytest.raises(LLMError) as exc:
+            generate_with_fallback(db,agent,conversation,'instruções sintéticas',[],
+                client=lambda *args,**kwargs:'Resposta em texto sem o envelope exigido.',
+                response_validator=_validate_visit_response_contract)
+        assert exc.value.category=='invalid_response'
+        run=db.query(ModelRun).one()
+        assert run.status=='exhausted'
+        assert run.attempts[0]['failure_stage']=='response_validation'
+        assert run.response_encrypted is None
+
+
+def test_cached_unstructured_answer_is_rejected_and_fallback_is_used(runtime):
+    from app.models import Agent, Conversation, LLMConfig, ModelRun
+    from app.security import encrypt_secret
+    from app.model_router import generate_with_fallback
+    from app.tasks import _validate_visit_response_contract
+    valid=('{"reply":"Vou encaminhar sua preferência para confirmação.",'
+           '"interpretation":{"channel_confirmation":"unknown",'
+           '"receiver_confirmation":"unknown","receiver_name":null,'
+           '"next_required_field":"receiver_confirmation"}}')
+    calls=[]
+    with runtime.db() as db:
+        agent=db.get(Agent,'agent-a');conversation=db.get(Conversation,'conversation-a')
+        history=[{'role':'user','content':'Preferência sintética de visita'}]
+        instructions='instruções sintéticas'
+        assert generate_with_fallback(db,agent,conversation,instructions,history,
+            client=lambda *args,**kwargs:'Resposta antiga sem JSON')=='Resposta antiga sem JSON'
+        db.add(LLMConfig(id='model-fallback',tenant_id='tenant-a',name='Fallback',provider='openai-compatible',
+            base_url='https://provider.invalid/v1',model='synthetic-second',embedding_model='synthetic',
+            api_key_encrypted=encrypt_secret('test-only-key')))
+        agent.fallback_config_ids=['model-fallback'];db.commit()
+        def client(provider,base,model,key,prompt,history,**kwargs):
+            calls.append(model);return valid
+        assert generate_with_fallback(db,agent,conversation,instructions,history,client=client,
+            response_validator=_validate_visit_response_contract)==valid
+        assert calls==['synthetic-second']
+        run=db.query(ModelRun).one()
+        assert [attempt['result'] for attempt in run.attempts]==['invalid_response','succeeded']
+        assert run.attempts[0]['failure_stage']=='response_validation'
+
+
 def test_idempotent_enqueue_concurrently_keeps_one_row(runtime):
     from app.models import OutboxMessage
     def attempt(_):
@@ -508,6 +590,36 @@ def test_core_groups_fragmented_input_and_persists_context(runtime,monkeypatch):
         assert db.get(Conversation,'conversation-a').context_state['request']=='Bom dia\nqual o horário?'
         assert db.query(OutboxPart).count()==1
     assert runtime.tasks.respond_to_conversation.run('tenant-a','conversation-a',3)=='already_enqueued'
+
+
+def test_visit_turn_passes_structured_output_validator_to_provider_router(runtime,monkeypatch):
+    from app.models import Agent,Conversation,OutboxMessage
+    from app.schemas import ConversationProfile
+    from app.llm_client import LLMError
+    core(runtime,monkeypatch)
+    with runtime.db() as db:
+        db.get(Agent,'agent-a').conversation_profile=ConversationProfile(enabled=True,visit_booking_enabled=True).model_dump()
+        db.commit()
+    runtime.tasks.process_webhook_event.run(event(runtime,'visit-contract-input',payload={
+        'phone':'synthetic-contact','normalizedKind':'text','normalizedText':'Quero orçamento para minha igreja.'
+    }))
+    with runtime.db() as db: revision=db.get(Conversation,'conversation-a').revision
+    valid=('{"reply":"Claro. Em qual cidade fica a igreja?",'
+           '"interpretation":{"channel_confirmation":"unknown",'
+           '"receiver_confirmation":"unknown","receiver_name":null,'
+           '"next_required_field":"city"}}')
+    def response(*args):
+        validator=args[-1]
+        assert callable(validator)
+        with pytest.raises(LLMError) as exc:validator('Resposta comum sem a estrutura de visita.')
+        assert exc.value.category=='invalid_response'
+        validator(valid)
+        return valid
+    monkeypatch.setattr(runtime.tasks,'_graph_response',response)
+    assert runtime.tasks.respond_to_conversation.run('tenant-a','conversation-a',revision)=='reply_queued'
+    with runtime.db() as db:
+        queued=db.query(OutboxMessage).filter_by(tenant_id='tenant-a',conversation_id='conversation-a',status='pending').one()
+        assert queued.content=='Claro. Em qual cidade fica a igreja?'
 
 
 def test_core_global_humanized_delivery_applies_without_agent_profile_opt_in(runtime,monkeypatch):

@@ -1,5 +1,25 @@
 # Estado atual comprovado no repositório
 
+**Nota de desenvolvimento local — 12/11/2026:** a revisão-base local desta etapa é
+`465d6b3e2185d1714bdbbde59383bda94c0b4b40`. A branch isolada
+`feat/semantic-llm-fallback` implementa validação do contrato de saída estruturada de
+visita antes de marcar uma tentativa LLM como sucedida, tenta o próximo modelo
+configurado com o mesmo snapshot e informa o estágio `response_validation` no painel.
+Quando nenhuma conexão produz envelope válido, a automação falha fechada e abre a
+intervenção existente com motivo específico. Sem migration. A suíte local completa
+passou: **223 testes**, no container Python 3.12 com PostgreSQL descartável e
+`MEDIA_DIR` temporário. Nenhum provedor real foi chamado. Esta branch não foi enviada,
+mesclada nem publicada; não atualiza o estado da VPS descrito nos snapshots históricos
+abaixo.
+
+O caminho de evolução inspirado pela DOLA permanece planejado: (1) validação e
+observabilidade de respostas estruturadas; (2) diálogo com estado explícito e avaliações
+offline; (3) ferramentas operacionais registradas em allowlist, isoladas por tenant e
+com confirmação conforme o risco; (4) memória longitudinal aprovada, com proveniência e
+expiração; (5) aprendizado supervisionado de correções, sem incorporar conversas brutas
+automaticamente. Não há multiagente, CRM/agenda operacional, nem aprendizado online
+confirmado nesta revisão.
+
 **Snapshot de referência:** 10/11/2026. O release de aplicação confirmado é
 `1f7d1a8333518f0b41d96d72676fd78cd759a8cb`; um commit posterior somente documental
 atualiza os handoffs e o procedimento. Compare o `HEAD` Git em cada ambiente antes de

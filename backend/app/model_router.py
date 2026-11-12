@@ -18,7 +18,8 @@ def candidate_configs(db, agent):
     return [by_id[x] for x in ids if x in by_id and by_id[x].enabled]
 
 
-def generate_with_fallback(db, agent, conversation, instructions, history, *, client=complete, revision=None):
+def generate_with_fallback(db, agent, conversation, instructions, history, *, client=complete, revision=None,
+                           response_validator=None):
     revision = conversation.revision if revision is None else revision
     serialized = json.dumps({"instructions":instructions,"history":history},ensure_ascii=False,sort_keys=True,separators=(",",":"))
     fingerprint = sha256(serialized.encode()).hexdigest()
@@ -29,12 +30,35 @@ def generate_with_fallback(db, agent, conversation, instructions, history, *, cl
     if run.agent_id != agent.id or run.context_hash != fingerprint:
         raise LLMError("Contexto ou agente mudou; aguarde nova revisão", category="stale_context")
     snapshot = json.loads(decrypt_secret(run.context_snapshot_encrypted))
+    invalid_cached_config = None
+    invalid_response_seen = False
     if run.status=="succeeded" and run.response_encrypted:
-        return decrypt_secret(run.response_encrypted)
+        cached_response = decrypt_secret(run.response_encrypted)
+        try:
+            if response_validator:
+                response_validator(cached_response)
+        except LLMError as exc:
+            if not exc.permits_fallback:
+                raise
+            invalid_response_seen = True
+            invalid_cached_config = run.selected_config_id
+            attempts = list(run.attempts or [])
+            for index in range(len(attempts)-1, -1, -1):
+                previous_attempt = attempts[index]
+                if previous_attempt.get("config_id") == invalid_cached_config and previous_attempt.get("result") == "succeeded":
+                    attempts[index] = {**previous_attempt,"result":exc.category,"failure_stage":"response_validation"}
+                    break
+            run.attempts = attempts
+            run.status = "trying_alternatives"
+            db.commit()
+        else:
+            return cached_response
     # Never silently replace the snapshot during a retry or model switch.
     candidates = candidate_configs(db,agent)
     if not candidates: raise LLMError("Configure ao menos uma conexão de IA habilitada",category="configuration")
     for config in candidates:
+        if config.id == invalid_cached_config:
+            continue
         now = datetime.now(timezone.utc)
         cooldown = config.cooldown_until
         if cooldown and cooldown.tzinfo is None: cooldown = cooldown.replace(tzinfo=timezone.utc)
@@ -48,6 +72,8 @@ def generate_with_fallback(db, agent, conversation, instructions, history, *, cl
         except LLMError as exc:
             attempt["result"]=exc.category
             attempt["http_status"]=exc.status_code
+            if exc.category == "invalid_response":
+                invalid_response_seen = True
             config.last_error_category=exc.category
             if exc.category in {"quota","authentication","rate_limit","unavailable"}:
                 base = {"quota":3600,"authentication":3600,"rate_limit":60,"unavailable":30}[exc.category]
@@ -57,6 +83,21 @@ def generate_with_fallback(db, agent, conversation, instructions, history, *, cl
             db.commit()
             if not exc.permits_fallback: raise
             continue
+        if response_validator:
+            try:
+                response_validator(answer)
+            except LLMError as exc:
+                attempt["result"] = exc.category
+                attempt["failure_stage"] = "response_validation"
+                run.attempts = (run.attempts or [])+[attempt]
+                run.status = "trying_alternatives"
+                db.commit()
+                if not exc.permits_fallback:
+                    run.status = "failed"
+                    db.commit()
+                    raise
+                invalid_response_seen = True
+                continue
         attempt["result"]="succeeded"
         run.attempts=(run.attempts or [])+[attempt]
         run.selected_config_id=config.id;run.status="succeeded"
@@ -65,4 +106,6 @@ def generate_with_fallback(db, agent, conversation, instructions, history, *, cl
         db.commit()
         return answer
     run.status="exhausted";db.commit()
+    if invalid_response_seen:
+        raise LLMError("Nenhum modelo retornou uma resposta válida para o contrato da conversa",category="invalid_response")
     raise LLMError("Nenhum modelo da cadeia está disponível; contexto preservado para nova tentativa",category="unavailable")
