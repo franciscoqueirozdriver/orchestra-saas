@@ -271,7 +271,7 @@ Não gera outbox. Registra métrica `conversation_wait_skipped`.
 | `proactivity` | int 0–10 | 5 |
 | `max_lines` | int 1–8 | 4 |
 | `forbidden_phrases` | list[str], máx. 10 | `[]` |
-| `adaptive_style` | bool | `false` |
+| `adaptive_style` | bool | `true` |
 | `memory_enabled` | bool | `false` |
 | `structured_decision_enabled` | bool | `false` |
 | `presence_enabled` | bool | `false` |
@@ -279,6 +279,16 @@ Não gera outbox. Registra métrica `conversation_wait_skipped`.
 `examples` sobe de 3 para 8 itens. `style_instructions` passa a montar o bloco a
 partir desses campos. Dimensão de estilo nunca altera fato, preço, permissão ou
 limite.
+
+Adaptação não usa banco de frases. Com `adaptive_style` ligado, o modelo recebe
+instrução para acompanhar o interlocutor: resposta curta para pessoa objetiva,
+detalhe quando ela pede detalhe, formalidade quando ela formaliza, objetividade e
+acolhimento quando ela demonstra irritação. O texto continua sendo gerado pelo
+modelo; o código só aplica guardas de segurança e comandos exatos.
+
+Frases em código são exclusivamente operacionais: `cancelar`, pedido de humano,
+opt-out, confirmação isolada (`ok`, `valeu`, `👍`) e avisos de intervenção. Nenhuma
+delas é usada para compor a resposta conversacional.
 
 ## 10. API e painel
 
