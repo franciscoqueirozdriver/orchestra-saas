@@ -19,7 +19,10 @@ const server = http.createServer((req,res)=>{
   const page=await browser.newPage();const errors=[];const mutations=[];
   page.on('pageerror',e=>errors.push(e.message));
   let revision=1,status='open',rejectSend=true;
-  let profile={enabled:false,visit_booking_enabled:false,tone:'neutral',conciseness:'balanced',emojis:'none',context_minutes:60,max_wait_seconds:20,part_chars:1500,part_delay_seconds:1,presence:false,humanized_delivery:false,humanized_target_chars:180,humanized_max_chars:300,humanized_max_parts:3,humanized_delay_seconds:2,vocabulary:[],examples:[]};
+  let profile={enabled:false,visit_booking_enabled:false,tone:'neutral',conciseness:'balanced',emojis:'none',context_minutes:60,max_wait_seconds:20,part_chars:1500,part_delay_seconds:1,presence:false,humanized_delivery:false,humanized_target_chars:180,humanized_max_chars:300,humanized_max_parts:3,humanized_delay_seconds:2,vocabulary:[],examples:[],
+    formality:3,empathy:7,humor:3,objectivity:7,proactivity:5,max_lines:4,
+    forbidden_phrases:[],adaptive_style:false,memory_enabled:false,
+    structured_decision_enabled:false,presence_enabled:false};
   await page.route('**/*',async route=>{
     const request=route.request(),url=new URL(request.url());
     if(url.origin!==origin)return route.abort();
@@ -31,6 +34,8 @@ const server = http.createServer((req,res)=>{
     else if(endpoint==='/agents/synthetic-agent/conversation-policy'){
       if(request.method()==='PUT')profile=request.postDataJSON();data=profile;
     }else if(endpoint==='/conversations')data=[{id:'synthetic-conversation',contact_name:'Contato fictício',last_message:'Pergunta fictícia'}];
+    else if(endpoint==='/conversations/synthetic-conversation/memory')data={summary:'',pending:[],items:[]};
+    else if(endpoint==='/conversations/synthetic-conversation/decision')data={intent:null,decision_action:null,provider:null,model:null};
     else if(endpoint==='/conversations/synthetic-conversation/state')data={id:'synthetic-conversation',revision,status,pause_reason:status==='human'?'external_takeover':null,consent_status:'unknown',opted_out:false,controls:{global:{enabled:true,source:'painel'},connection:{id:'synthetic-connection',label:'Conexão sintética',active:true,status:'connected',sending_enabled:true,webhook_configured:true},agent:{id:'synthetic-agent',name:'Agente fictício',enabled:true,auto_reply_enabled:true},policy_denial:'consent_required',blockers:['consent_required'],last_message_direction:'outgoing',last_message_author:'operator',processing:{webhook:{processed:true,attempts:1,error:null},model:{status:'exhausted',attempts:[{provider:'provedor sintético',result:'unavailable'}]}}},outbox:[]};
     else if(endpoint==='/conversations/synthetic-conversation/messages'){
       if(request.method()==='POST'){
@@ -55,9 +60,13 @@ const server = http.createServer((req,res)=>{
   assert.equal(await page.locator('#conversation-profile-form [name="humanized_delivery"]').count(),0);
   assert.equal(await page.locator('#conversation-profile-form [name="humanized_max_parts"]').count(),0);
   await page.locator('#conversation-profile-form [name="tone"]').selectOption('formal');
+  await page.locator('#conversation-profile-form [name="formality"]').fill('9');
+  await page.locator('#conversation-profile-form [name="structured_decision_enabled"]').check();
   await page.getByRole('button',{name:'Salvar perfil'}).click();
   await page.waitForFunction(()=>!document.querySelector('#modal').open);
   assert.equal(profile.enabled,true);assert.equal(profile.visit_booking_enabled,true);assert.equal(profile.tone,'formal');assert.equal(profile.humanized_delivery,false);assert.equal(profile.humanized_max_parts,3);
+  assert.equal(profile.formality,9);
+  assert.equal(profile.structured_decision_enabled,true);
   await page.locator('[data-route="conversations"]').click();await page.locator('[data-conversation]').click();
   await page.getByRole('button',{name:'Controle da automação'}).click();
   assert.match(await page.locator('#modal-body').innerText(),/Envio global/);
