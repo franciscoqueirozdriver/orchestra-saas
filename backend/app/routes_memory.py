@@ -1,7 +1,6 @@
 """Memory review and last-decision inspection, always tenant-scoped."""
 from fastapi import APIRouter, HTTPException
 
-from app.control import serialized_mutation
 from app.dependencies import CurrentUser, DbSession, TenantId
 from app.models import Conversation, LLMConfig, MemoryItem, ModelRun
 from app.schemas import MemoryUpdate
@@ -57,7 +56,6 @@ def read_decision(conversation_id: str, db: DbSession, tenant_id: TenantId):
 
 
 @router.patch('/memory/{memory_id}')
-@serialized_mutation
 def update_memory(memory_id: str, payload: MemoryUpdate, db: DbSession, tenant_id: TenantId, user: CurrentUser):
     row = db.query(MemoryItem).filter_by(tenant_id=tenant_id, id=memory_id).first()
     if not row:
@@ -73,7 +71,6 @@ def update_memory(memory_id: str, payload: MemoryUpdate, db: DbSession, tenant_i
 
 
 @router.delete('/memory/{memory_id}', status_code=204)
-@serialized_mutation
 def delete_memory(memory_id: str, db: DbSession, tenant_id: TenantId, user: CurrentUser):
     row = db.query(MemoryItem).filter_by(tenant_id=tenant_id, id=memory_id).first()
     if not row:

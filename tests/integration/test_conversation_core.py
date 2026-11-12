@@ -254,3 +254,93 @@ def test_memory_and_decision_routes_never_cross_tenants(runtime):
                 call()
             assert failure.value.status_code == 404
         assert db.get(MemoryItem, 'memory-a') is not None
+
+
+def test_read_memory_returns_summary_pending_and_facts(runtime):
+    from app import routes_memory
+    from app.models import Conversation, MemoryItem
+
+    with runtime.db() as db:
+        conversation = db.get(Conversation, 'conversation-a')
+        conversation.context_state = {'summary': 'Resumo atual.', 'pending': ['bairro']}
+        db.add(MemoryItem(id='memory-a', tenant_id='tenant-a', contact_key='synthetic-contact',
+                          kind='preference', fact_key='preference', content='prefere manhã',
+                          approved=True, source='operator'))
+        db.commit()
+        payload = routes_memory.read_memory('conversation-a', db=db, tenant_id='tenant-a')
+    assert payload['summary'] == 'Resumo atual.'
+    assert payload['pending'] == ['bairro']
+    assert [item['content'] for item in payload['items']] == ['prefere manhã']
+    assert 'tenant_id' not in payload['items'][0]
+    assert payload['items'][0]['approved'] is True
+
+
+def test_update_and_delete_memory_persist_without_touching_conversation(runtime):
+    from app import routes_memory
+    from app.models import Conversation, MemoryItem
+    from app.schemas import MemoryUpdate
+
+    with runtime.db() as db:
+        db.add(MemoryItem(id='memory-a', tenant_id='tenant-a', contact_key='synthetic-contact',
+                          kind='note', content='fato revisável', approved=False))
+        db.commit()
+        revision = db.get(Conversation, 'conversation-a').revision
+        updated = routes_memory.update_memory('memory-a', payload=MemoryUpdate(approved=True),
+                                              db=db, tenant_id='tenant-a', user=runtime.admin)
+        assert updated['approved'] is True
+        db.expire_all()
+        assert db.get(MemoryItem, 'memory-a').approved is True
+        assert db.get(Conversation, 'conversation-a').revision == revision
+        assert routes_memory.delete_memory('memory-a', db=db, tenant_id='tenant-a',
+                                           user=runtime.admin) is None
+        db.expire_all()
+        assert db.get(MemoryItem, 'memory-a') is None
+        assert db.get(Conversation, 'conversation-a').revision == revision
+
+
+def test_read_decision_reports_selected_provider_and_model(runtime):
+    from app import routes_memory
+    from app.models import Conversation, ModelRun
+
+    with runtime.db() as db:
+        conversation = db.get(Conversation, 'conversation-a')
+        conversation.context_state = {'intent': 'pedido', 'pending': ['bairro'],
+                                      'decision_action': 'respond', 'segredo': 'não expor'}
+        db.add(ModelRun(tenant_id='tenant-a', conversation_id='conversation-a',
+                        revision=conversation.revision, context_snapshot_encrypted='synthetic',
+                        context_hash='0' * 64, selected_config_id='model-a', status='completed'))
+        db.commit()
+        payload = routes_memory.read_decision('conversation-a', db=db, tenant_id='tenant-a')
+    assert payload['intent'] == 'pedido'
+    assert payload['pending'] == ['bairro']
+    assert payload['provider'] == 'openai-compatible'
+    assert payload['model'] == 'synthetic'
+    assert 'segredo' not in payload
+
+
+def test_business_fact_approval_requires_admin(runtime):
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    from app import routes_memory
+    from app.models import MemoryItem
+    from app.schemas import MemoryUpdate
+
+    with runtime.db() as db:
+        db.add(MemoryItem(id='memory-business', tenant_id='tenant-a', contact_key='synthetic-contact',
+                          kind='business', content='fato comercial', approved=False))
+        db.commit()
+        with pytest.raises(HTTPException) as failure:
+            routes_memory.update_memory('memory-business', payload=MemoryUpdate(approved=True),
+                                        db=db, tenant_id='tenant-a',
+                                        user=SimpleNamespace(role='agent'))
+        assert failure.value.status_code == 403
+        db.expire_all()
+        assert db.get(MemoryItem, 'memory-business').approved is False
+        approved = routes_memory.update_memory('memory-business', payload=MemoryUpdate(approved=True),
+                                               db=db, tenant_id='tenant-a',
+                                               user=SimpleNamespace(role='tenant_admin'))
+        assert approved['approved'] is True
+        db.expire_all()
+        assert db.get(MemoryItem, 'memory-business').approved is True
