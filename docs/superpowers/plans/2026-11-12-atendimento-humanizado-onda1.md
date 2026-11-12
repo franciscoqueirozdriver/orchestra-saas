@@ -727,6 +727,12 @@ def test_rejects_invalid_or_out_of_allowlist_output():
     assert parse_decision_envelope(_envelope(action='delete')) is None
     assert parse_decision_envelope(_envelope(intent='qualquer')) is None
     assert parse_decision_envelope(json.dumps({'reply': 'ok', 'decision': {'intent': 'pedido'}})) is None
+    assert parse_decision_envelope(json.dumps({'reply': 'ok', 'decision': {'intent': ['pedido'], 'sentiment': 'neutro', 'action': 'respond'}})) is None
+    assert parse_decision_envelope(json.dumps({'reply': 'ok', 'decision': {'intent': 'pedido', 'sentiment': 'neutro', 'action': 'respond', 'pending': 5}})) is None
+    assert parse_decision_envelope(json.dumps({'reply': 'ok', 'decision': {'intent': 'pedido', 'sentiment': 'neutro', 'action': 'respond', 'pending': 'texto'}})) is None
+    assert parse_decision_envelope('[]') is None
+    assert parse_decision_envelope('null') is None
+    assert parse_decision_envelope('"texto"') is None
 
 
 def test_accepts_fenced_json_and_limits_pending():
@@ -747,6 +753,7 @@ def test_state_patch_carries_only_allowlisted_fields():
 def test_visit_block_is_optional_but_validated_when_present():
     assert clean_visit(None) is None
     assert clean_visit({'channel_confirmation': 'nope'}) is None
+    assert clean_visit({'channel_confirmation': ['use_current'], 'receiver_confirmation': 'customer'}) is None
     good = clean_visit({'channel_confirmation': 'use_current', 'receiver_confirmation': 'customer',
                         'receiver_name': None, 'next_required_field': 'city'})
     assert good['receiver_confirmation'] == 'customer'
@@ -808,6 +815,8 @@ def parse_decision_envelope(value):
     if not isinstance(decision, dict):
         return None
     intent, sentiment, action = decision.get('intent'), decision.get('sentiment'), decision.get('action')
+    if not (isinstance(intent, str) and isinstance(sentiment, str) and isinstance(action, str)):
+        return None
     if intent not in INTENTS or sentiment not in SENTIMENTS or action not in ACTIONS:
         return None
     facts = {}
@@ -816,7 +825,12 @@ def parse_decision_envelope(value):
         for key, item in raw_facts.items():
             if key in FACT_KEYS and isinstance(item, str) and 0 < len(item.strip()) <= 300:
                 facts[key] = item.strip()
-    pending = [item.strip()[:200] for item in (decision.get('pending') or [])
+    raw_pending = decision.get('pending')
+    if raw_pending is None:
+        raw_pending = []
+    if not isinstance(raw_pending, list):
+        return None
+    pending = [item.strip()[:200] for item in raw_pending
                if isinstance(item, str) and item.strip()][:10]
     clean = {
         'intent': intent, 'sentiment': sentiment, 'action': action,
@@ -836,7 +850,7 @@ def clean_visit(value):
     clean = {}
     for key, allowed in VISIT_FIELDS.items():
         item = value.get(key)
-        if item in allowed:
+        if isinstance(item, str) and item in allowed:
             clean[key] = item
     if len(clean) != len(VISIT_FIELDS):
         return None
