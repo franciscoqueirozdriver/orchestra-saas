@@ -159,3 +159,49 @@ def test_wait_action_skips_outbox(runtime, monkeypatch):
         after = db.query(OutboxMessage).filter_by(tenant_id='tenant-a',
                                                   conversation_id='conversation-a').count()
     assert after == before
+
+
+def test_wait_skipped_is_terminal_for_recovery(runtime, monkeypatch):
+    from app.models import Conversation, OutboxMessage
+    _enable(runtime, structured_decision_enabled=True)
+    _add_incoming(runtime, 'ok')
+    monkeypatch.setattr(runtime.tasks, 'generate_with_fallback', lambda *a, **k: (
+        '{"reply":"Combinado.","decision":{"intent":"confirmacao","sentiment":"positivo",'
+        '"stage":"encerrado","action":"wait","facts":{},"pending":[],'
+        '"next_best_action":"nada"}}'))
+    with runtime.db() as db:
+        conversation = db.get(Conversation, 'conversation-a')
+        conversation.context_state = {}
+        conversation.turn_started_at = conversation.last_incoming_at
+        db.commit()
+        revision = conversation.revision
+    scheduled = []
+    monkeypatch.setattr(runtime.tasks, '_schedule_reply', lambda *args: scheduled.append(args))
+    assert runtime.tasks.respond_to_conversation('tenant-a', 'conversation-a', revision) == 'wait_skipped'
+    with runtime.db() as db:
+        conversation = db.get(Conversation, 'conversation-a')
+        assert conversation.response_attempts >= 3
+        assert conversation.revision == revision
+        assert db.query(OutboxMessage).filter_by(tenant_id='tenant-a',
+                                                 conversation_id='conversation-a',
+                                                 response_revision=revision).count() == 0
+    runtime.tasks.recover_pending_work.run()
+    assert scheduled == []
+
+
+def test_stale_handoff_never_mutates_conversation(runtime):
+    from app.models import Conversation, InterventionRequest, OutboxMessage
+    _enable(runtime, structured_decision_enabled=True)
+    with runtime.db() as db:
+        assert runtime.tasks._handoff_from_decision(
+            db, 'tenant-a', 'conversation-a', 2, 'agent-a',
+            'Vou chamar uma pessoa da equipe.') == 'stale_response'
+        assert runtime.tasks._handoff_from_decision(
+            db, 'tenant-a', 'conversation-a', 1, 'agent-b',
+            'Vou chamar uma pessoa da equipe.') == 'stale_response'
+        db.expire_all()
+        conversation = db.get(Conversation, 'conversation-a')
+        assert conversation.revision == 1
+        assert conversation.status == 'open'
+        assert db.query(InterventionRequest).count() == 0
+        assert db.query(OutboxMessage).count() == 0

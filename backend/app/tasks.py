@@ -110,7 +110,7 @@ def _apply_conversation_memory(db, tenant_id, conversation_id, revision, decisio
         return True
 
 
-def _handoff_from_decision(db, tenant_id, conversation_id, reply):
+def _handoff_from_decision(db, tenant_id, conversation_id, expected_revision, expected_agent_id, reply):
     with tenant_guard(tenant_id):
         db.expire_all()
         conversation = db.query(Conversation).filter_by(id=conversation_id, tenant_id=tenant_id).first()
@@ -119,6 +119,8 @@ def _handoff_from_decision(db, tenant_id, conversation_id, reply):
         instance = db.query(ZapiInstance).filter_by(id=conversation.instance_id, tenant_id=tenant_id).first()
         if not instance:
             return 'instance_missing'
+        if conversation.revision != expected_revision or instance.agent_id != expected_agent_id:
+            return 'stale_response'
         action(db, conversation, 'human_requested')
         ticket, created = create_request(db, instance, conversation, 'pedido de atendimento humano identificado na conversa')
         db.commit()
@@ -540,7 +542,8 @@ def respond_to_conversation(tenant_id, conversation_id, expected_revision):
                         current.context_expires_at=datetime.now(timezone.utc)+timedelta(minutes=profile.context_minutes)
                         db.commit();sales_context=updated
             if decision.get('action') == 'handoff':
-                return _handoff_from_decision(db, tenant_id, conversation_id, answer)
+                return _handoff_from_decision(db, tenant_id, conversation_id,
+                                              expected_revision, agent.id, answer)
             turn=db.query(ConversationTurn).filter_by(tenant_id=tenant_id,conversation_id=conversation_id,revision=expected_revision).first() if profile.enabled else None
             if profile.enabled:answer=output_guard(answer,turn.state if turn else {})
             if needs_unverified_visit_handoff(answer or '',sales_context):
@@ -590,7 +593,11 @@ def respond_to_conversation(tenant_id, conversation_id, expected_revision):
                         and should_wait(turn.state.get('request') if turn else '',
                                         (conversation.context_state or {}).get('pending') or [],
                                         last_assistant.content if last_assistant else '')):
+                    # A deliberate wait has no outbox row for this revision, so
+                    # recovery must not treat the turn as unsent work. Exhaust the
+                    # attempts like resume does; new inbound resets them.
                     conversation.turn_started_at = None
+                    conversation.response_attempts = 3
                     db.commit()
                     return 'wait_skipped'
                 # Conversational delivery is a shared channel behavior, not an
