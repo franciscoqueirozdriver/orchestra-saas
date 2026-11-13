@@ -5,6 +5,7 @@ segurança completa nem declaração de vulnerabilidade confirmada.
 
 | Área | Risco/limite | Antes de mudar |
 |---|---|---|
+| Sessão da plataforma | JWT de acesso expira em 30 min por padrão. A renovação local via `/auth/me` só funciona enquanto o token ainda é válido; expiração após inatividade prolongada ou rotação de `JWT_SECRET` exige novo login. Renovação automática ainda precisa validação após publicação. | Manter teste de token perto da expiração, 401/retry e usuário inativo; nunca prolongar validade sem autenticar usuário ativo. Verificar configuração efetiva sem revelar segredo e confirmar em produção após release. |
 | Autenticação e tenant | Erro em dependências ou filtro de consulta pode expor empresa a outra | Revisar todas as rotas/leitores/jobs envolvidos e adicionar teste negativo de tenant/role com fixture sintética |
 | Migrations | Cadeia local chegou a `0010`; snapshot de banco real é desconhecido | Ler migration anterior e posterior, upgrade/downgrade, dados legados e impacto em release; nunca alterar migration histórica ou executar em produção sem autorização e backup |
 | API e UI | Rotas chamadas `zapi` servem ambos os adaptadores; contratos podem ter consumidores no JS, worker e callbacks | Mapear chamadas/consumidores e preservar compatibilidade; testar payloads de cada provedor sem segredos |

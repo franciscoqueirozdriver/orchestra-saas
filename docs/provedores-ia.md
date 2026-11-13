@@ -83,9 +83,19 @@ erros, timeout e isolamento por empresa. Não é necessária migration para nova
 conexões nos protocolos existentes.
 
 Os testes usam dados sintéticos, HTTP simulado e PostgreSQL descartável.
-Cadastrar uma conexão não valida saldo, permissão do modelo ou disponibilidade
-real. A homologação externa deve usar conta e destinatário de teste autorizados.
-Nenhuma mensagem real é enviada pelo cadastro ou pelos testes de interface.
+Ao salvar uma conexão, a aplicação envia pelo backend um prompt técnico curto ao
+modelo salvo e apresenta sucesso ou erro categorizado. A tela também tem um botão
+**Testar modelo** para repetir a verificação em conexões existentes. O resultado
+não altera principal, alternativas, cooldown ou busca e não é persistido em
+`model_runs`; a conexão permanece salva mesmo quando o teste falha. As credenciais
+e o corpo bruto do fornecedor não são devolvidos nem registrados pela rota. Cada
+teste é uma chamada externa e pode consumir quota/custo. Esse teste confirma apenas
+que a conexão respondeu naquele momento, não qualidade, saldo futuro ou adequação
+para atendimento real. Nenhuma mensagem de WhatsApp é enviada.
+
+Os testes automatizados usam apenas dados sintéticos, HTTP simulado e PostgreSQL
+descartável; não chamam fornecedores reais. Homologação de comportamento comercial
+deve ser feita separadamente com conta e destinatário de teste autorizados.
 
 Referências de contrato: [Gemini](https://ai.google.dev/gemini-api/docs/openai),
 [Mistral](https://docs.mistral.ai/api),

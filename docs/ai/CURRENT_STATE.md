@@ -1,5 +1,14 @@
 # Estado atual comprovado no repositório
 
+**Sessão da plataforma — implementação local nesta branch:** o access token JWT é
+curto (30 min padrão, configurável por `ACCESS_TOKEN_MINUTES`). O frontend agora
+renova por `/api/auth/me` quando a página está visível e houve atividade recente,
+e tenta renovar/repetir uma única vez uma chamada que recebe 401. `/auth/me` exige
+token ainda válido; após expiração completa, inatividade prolongada ou mudança da
+chave JWT, um novo login continua necessário. Ver `frontend/app.js`,
+`backend/app/routes_auth.py` e o handoff `2026-11-13-teste-conexao-modelo.md`.
+Ainda não publicado nem verificado em produção.
+
 **Nota de desenvolvimento local — 12/11/2026:** a revisão-base local desta etapa é
 `465d6b3e2185d1714bdbbde59383bda94c0b4b40`. A branch isolada
 `feat/semantic-llm-fallback` implementa validação do contrato de saída estruturada de
@@ -73,7 +82,7 @@ homologação de fornecedor.
 | Agentes, regras de conversa e envio humano no painel | Implementado | `routes_agents.py`, `routes_conversations.py`, `conversation/`, `tasks.py` | Qualidade conversacional em produção não foi avaliada |
 | Conexões Z-API e WAME | Implementado no código | `routes_zapi.py`, `transport.py`, `zapi_client.py`, `wame_client.py`, UI `frontend/app.js`; commits `68fc944`, `13ca542`, `895393a`; `docs/conexoes-whatsapp.md` documenta WAME oficial/QR e Z-API QR | Não confirma credenciais válidas, sessão conectada, callbacks, envio ou entrega reais; código da API oficial Z-API não está disponível na tela |
 | Criar grupo por API e escalonamento humano | Implementado no código | `routes_zapi.py`, `interventions.py`, `schemas.py`, `models.py`, migration `0009`, `docs/intervencao-humana-grupo.md`; commit `707fa3c` | Não comprova grupo criado, validação operacional ou aceite concorrente em serviço real |
-| Modelos de conversa, conexões e fallback | Implementado no código | `routes_llm.py`, `routes_agents.py`, `model_router.py`, `llm_client.py`, catálogo `provider_catalog.py` | O painel/banco do tenant controla a principal e a ordem `fallback_config_ids`; catálogo não escolhe modelo nem verifica provedor. Cadastro não valida acesso ou quota; não há seed/migration de cadeia por empresa |
+| Modelos de conversa, conexões e fallback | Implementado no código | `routes_llm.py`, `routes_agents.py`, `model_router.py`, `llm_client.py`, catálogo `provider_catalog.py` | O painel/banco do tenant controla a principal e a ordem `fallback_config_ids`; catálogo não escolhe modelo. Salvar ou testar conexão faz chamada curta sem persistir resultado nem alterar cooldown/default. Pode consumir quota e não homologa qualidade; não há seed/migration de cadeia por empresa |
 | Armazenar documentos e indexar sob demanda | Implementado no código | `routes_knowledge.py`, `embedding_config.py`, `models.py` | Upload não indexa automaticamente; embeddings exigem configuração compatível e não foram homologados aqui |
 | Histórico importado e contexto por conversa | Implementado no código | migrations `0008`, models `HistoricalImportBatch`, `ConversationContactAlias`, `Message`; `routes_conversations.py`, `tasks.py`, `history_import.py` | Não implica aprendizado automático nem conhecimento factual aprovado |
 | Pipeline privado de conversas | Implementado como ferramentas locais | `scripts/private_knowledge/`, `docs/conhecimento/ingestao-local-whatsapp.md` | Não é parte do serviço da aplicação; material bruto não foi examinado nesta auditoria |

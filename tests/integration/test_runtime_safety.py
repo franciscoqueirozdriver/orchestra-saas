@@ -1343,6 +1343,73 @@ def test_provider_connections_are_multiple_private_and_tenant_scoped(runtime):
         assert len(list_connections(db,'tenant-a'))==1
 
 
+def test_connection_test_uses_saved_config_without_persisting_or_changing_cooldown(runtime,monkeypatch):
+    from datetime import datetime,timedelta,timezone
+    from app.routes_llm import test_connection
+    from app.models import LLMConfig,ModelRun
+    from app.security import decrypt_secret
+
+    calls=[]
+    def fake_complete(provider,base,model,key,instructions,history,**kwargs):
+        calls.append((provider,base,model,key,instructions,history,kwargs))
+        return 'OK'
+    monkeypatch.setattr('app.routes_llm.complete',fake_complete)
+    with runtime.db() as db:
+        row=db.get(LLMConfig,'model-a')
+        row.protocol='chat-completions'
+        row.enabled=False
+        row.cooldown_until=datetime.now(timezone.utc)+timedelta(hours=1)
+        row.last_error_category='quota'
+        db.commit()
+        before=(row.enabled,row.cooldown_until,row.last_error_category,row.is_default)
+
+        result=test_connection('model-a',db,'tenant-a',runtime.admin)
+
+        assert result['ok'] is True and result['model']=='synthetic'
+        assert result['message']=='O modelo respondeu ao teste.'
+        assert set(result)=={'ok','model','elapsed_ms','message'}
+        assert len(calls)==1
+        provider,base,model,key,instructions,history,kwargs=calls[0]
+        assert (provider,base,model,key)==('openai-compatible','https://provider.invalid/v1','synthetic',decrypt_secret(row.api_key_encrypted))
+        assert instructions=='Este é um teste técnico de conexão. Responda somente com: OK.'
+        assert 'synthetic-contact' not in str(history) and history==[{'role':'user','content':'Responda somente: OK'}]
+        assert kwargs=={'protocol':'chat-completions','max_output_tokens':64}
+        assert (row.enabled,row.cooldown_until,row.last_error_category,row.is_default)==before
+        assert db.query(ModelRun).count()==0
+
+
+def test_connection_test_sanitizes_provider_error_and_enforces_tenant_admin(runtime,monkeypatch):
+    from app.routes_llm import test_connection
+    from app.llm_client import LLMError
+    from fastapi import HTTPException
+
+    monkeypatch.setattr('app.routes_llm.complete',lambda *a,**k:(_ for _ in ()).throw(
+        LLMError('upstream private response and synthetic-secret',category='authentication',status_code=401)))
+    with runtime.db() as db:
+        result=test_connection('model-a',db,'tenant-a',runtime.admin)
+        assert result['ok'] is False
+        assert result['category']=='authentication' and result['status_code']==401
+        assert 'synthetic-secret' not in str(result) and 'upstream private response' not in str(result)
+        with pytest.raises(HTTPException) as exc:
+            test_connection('model-a',db,'tenant-b',runtime.admin)
+        assert exc.value.status_code==404
+        with pytest.raises(HTTPException) as exc:
+            test_connection('model-a',db,'tenant-a',SimpleNamespace(role='operator'))
+        assert exc.value.status_code==403
+
+
+def test_connection_test_without_saved_key_does_not_call_provider(runtime,monkeypatch):
+    from app.routes_llm import test_connection
+    from app.models import LLMConfig
+    calls=[]
+    monkeypatch.setattr('app.routes_llm.complete',lambda *a,**k:calls.append((a,k)))
+    with runtime.db() as db:
+        row=db.get(LLMConfig,'model-a');row.api_key_encrypted='';db.commit()
+        result=test_connection('model-a',db,'tenant-a',runtime.admin)
+        assert result['ok'] is False and result['category']=='configuration'
+        assert calls==[]
+
+
 def test_generation_provider_change_preserves_embedding_destination_and_old_key(runtime):
     from app.routes_llm import update_connection
     from app.schemas import LLMConfigUpsert

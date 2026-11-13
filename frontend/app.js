@@ -5,16 +5,27 @@
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const state = {token:sessionStorage.getItem('zapia_token')||'', role:sessionStorage.getItem('zapia_role')||'', tenant:sessionStorage.getItem('zapia_tenant')||'', tenantId:sessionStorage.getItem('zapia_tenant_id')||'', route:'dashboard', summary:null, conversations:[], selectedConversation:null};
+  let lastUserActivity=Date.now(), renewalPromise=null;
   const labels = {dashboard:'Visão geral',agents:'Agentes',instances:'Conexões WhatsApp',conversations:'Conversas',knowledge:'Conhecimento',business:'Negócio',model:'Modelo IA',tenants:'Empresas',settings:'Configurações'};
   function toast(message,type='') { const el=document.createElement('div'); el.className=`toast ${type}`; el.textContent=message; $('#toast-region').append(el); setTimeout(()=>el.remove(),4800); }
-  async function request(path,{method='GET',body,form=false}={}) {
+  function decodeTokenExpiry(token=state.token){try{const payload=token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/');return Number(JSON.parse(atob(payload)).exp)*1000||0}catch{return 0}}
+  function persistSession(data){if(!data?.access_token)throw new Error('A API não retornou um token de acesso renovado.');state.token=data.access_token;state.role=data.role||state.role;if(data.tenant_id!=null){state.tenantId=String(data.tenant_id);state.tenant=data.tenant_name||''}else if(state.role!=='platform_admin'){state.tenantId='';state.tenant=''}sessionStorage.setItem('zapia_token',state.token);sessionStorage.setItem('zapia_role',state.role);sessionStorage.setItem('zapia_tenant',state.tenant);sessionStorage.setItem('zapia_tenant_id',state.tenantId);}
+  async function responseData(response){let data=null;const text=await response.text();if(text){try{data=JSON.parse(text)}catch{data={message:text}}}return data}
+  function responseError(data,status){const msg=data?.detail||data?.message||`Erro HTTP ${status}`;return new Error(typeof msg==='string'?msg:Array.isArray(msg)?msg.map(item=>`${({name:'Nome da empresa',slug:'Slug',owner_name:'Nome do responsável',owner_email:'E-mail do responsável',owner_password:'Senha do responsável'})[item.loc?.at(-1)]||item.loc?.at(-1)||'Campo'}: ${item.msg||'valor inválido'}`).join('; '):`Erro HTTP ${status}`)}
+  async function renewSession(){if(!state.token)return false;if(renewalPromise)return renewalPromise;const token=state.token;renewalPromise=(async()=>{const response=await fetch(API+'/auth/me',{headers:{Authorization:`Bearer ${token}`}});const data=await responseData(response);if(response.status===401){logout();throw new Error('Sua sessão expirou. Entre novamente para continuar.')}if(!response.ok)throw responseError(data,response.status);persistSession(data);return true})().finally(()=>{renewalPromise=null});return renewalPromise}
+  async function request(path,{method='GET',body,form=false}={},retried=false) {
     const headers={}; if(state.token) headers.Authorization=`Bearer ${state.token}`; if(state.tenantId) headers['X-Tenant-ID']=state.tenantId;
     if(body!==undefined && !form) headers['Content-Type']='application/json';
     const response=await fetch(API+path,{method,headers,body:body===undefined?undefined:form?body:JSON.stringify(body)});
-    let data=null; const text=await response.text(); if(text){try{data=JSON.parse(text)}catch{data={message:text}}}
-    if(!response.ok){const msg=data?.detail||data?.message||`Erro HTTP ${response.status}`; throw new Error(typeof msg==='string'?msg:Array.isArray(msg)?msg.map(item=>`${({name:'Nome da empresa',slug:'Slug',owner_name:'Nome do responsável',owner_email:'E-mail do responsável',owner_password:'Senha do responsável'})[item.loc?.at(-1)]||item.loc?.at(-1)||'Campo'}: ${item.msg||'valor inválido'}`).join('; '):`Erro HTTP ${response.status}`)}
+    const data=await responseData(response);
+    if(response.status===401&&!retried&&state.token&&!path.startsWith('/auth/')){await renewSession();return request(path,{method,body,form},true)}
+    if(!response.ok)throw responseError(data,response.status);
     return data;
   }
+  function noteUserActivity(){lastUserActivity=Date.now()}
+  function startSessionRenewal(){setInterval(()=>{if(!state.token||document.visibilityState==='hidden'||Date.now()-lastUserActivity>30*60*1000)return;const expiresAt=decodeTokenExpiry();if(expiresAt&&expiresAt-Date.now()<=5*60*1000)renewSession().catch(()=>{});},60*1000)}
+  document.addEventListener('pointerdown',noteUserActivity,{passive:true});document.addEventListener('keydown',noteUserActivity);document.addEventListener('input',noteUserActivity,{passive:true});
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){noteUserActivity();const expiresAt=decodeTokenExpiry();if(state.token&&expiresAt&&expiresAt-Date.now()<=5*60*1000)renewSession().catch(()=>{})}});
   function setLoggedIn(on){$('#login-view').hidden=on;$('#app-view').hidden=!on;if(on){$('#tenant-name').textContent=state.tenant||'Seu espaço';$('#tenants-nav').hidden=state.role!=='platform_admin';$('#user-avatar').textContent=(state.tenant||'U').trim().charAt(0).toUpperCase();}}
   function loading(){return '<div class="loading"><span class="spinner" aria-hidden="true"></span>Carregando dados…</div>';}
   function pageHead(title,subtitle,action=''){return `<div class="page-head"><div><p class="eyebrow">ATENDIMENTO HUMANO NO WHATSAPP</p><h1>${esc(title)}</h1><p>${esc(subtitle)}</p></div>${action}</div>`;}
@@ -232,8 +243,8 @@
     });
   }
 
-  $('#login-form').addEventListener('submit',async e=>{e.preventDefault();const button=e.currentTarget.querySelector('[type=submit]'),error=$('#login-error');error.textContent='';button.disabled=true;button.textContent='Entrando…';try{const d=await request('/auth/login',{method:'POST',body:{email:$('#login-email').value,password:$('#login-password').value}});if(!d?.access_token)throw new Error('Resposta de login sem token de acesso.');state.token=d.access_token;state.role=d.role||'';state.tenant=d.tenant_name||'';state.tenantId=d.tenant_id?String(d.tenant_id):'';sessionStorage.setItem('zapia_tenant_id',state.tenantId);sessionStorage.setItem('zapia_token',state.token);sessionStorage.setItem('zapia_role',state.role);sessionStorage.setItem('zapia_tenant',state.tenant);$('#login-password').value='';state.route='dashboard';if(!location.hash)history.replaceState(null,'','#dashboard');setLoggedIn(true);wireNav();render();}catch(err){error.textContent=err.message||'Não foi possível entrar.';}finally{button.disabled=false;button.innerHTML='Entrar <span aria-hidden="true">→</span>'}});
+  $('#login-form').addEventListener('submit',async e=>{e.preventDefault();const button=e.currentTarget.querySelector('[type=submit]'),error=$('#login-error');error.textContent='';button.disabled=true;button.textContent='Entrando…';try{const d=await request('/auth/login',{method:'POST',body:{email:$('#login-email').value,password:$('#login-password').value}});persistSession(d);noteUserActivity();$('#login-password').value='';state.route='dashboard';if(!location.hash)history.replaceState(null,'','#dashboard');setLoggedIn(true);wireNav();render();}catch(err){error.textContent=err.message||'Não foi possível entrar.';}finally{button.disabled=false;button.innerHTML='Entrar <span aria-hidden="true">→</span>'}});
   document.addEventListener('click',e=>{const b=e.target.closest('[data-intervention]');if(b)interventionRoutingForm(b.dataset.intervention)});
   window.addEventListener('hashchange',()=>{if(state.token)render()});
-  if(state.token){setLoggedIn(true);wireNav();render()}else setLoggedIn(false);
+  startSessionRenewal();if(state.token){setLoggedIn(true);wireNav();render()}else setLoggedIn(false);
 })();
