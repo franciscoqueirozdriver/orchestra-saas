@@ -1,4 +1,4 @@
-/* Configurable connections. No live discovery or provider requests from the browser. */
+/* Configurable connections. Provider tests run only through the authenticated backend. */
 (() => {
   'use strict';
   window.OrchestraLlmUI = {create};
@@ -15,18 +15,31 @@
       try {
         const [data,providers]=await Promise.all([connections(),catalog()]);
         if(getRoute()!=='model')return;
-        const rows=data.map(c=>`<tr><td><strong>${esc(c.name)}</strong><small class="muted-text"> ${esc(c.provider)}</small></td><td>${esc(c.model)}<small class="muted-text"> ${esc(c.resolved_protocol||c.protocol)}</small></td><td>${c.is_default?'<span class="badge badge-good">Padrão da empresa</span>':''}<span class="badge">${c.enabled?'Habilitada':'Desativada'}</span></td><td>${c.has_api_key?'Chave cadastrada':'Sem chave'}<small class="muted-text"> ${c.embedding_configured?'Busca configurada':'Busca precisa de configuração'}</small></td><td><div class="actions"><button class="small-button" data-llm-edit="${esc(c.id)}">Editar</button>${!c.is_default?`<button class="small-button" data-llm-default="${esc(c.id)}">Definir padrão</button>`:''}<button class="small-button" data-llm-resume="${esc(c.id)}">Limpar pausa de erro</button><button class="small-button" data-llm-delete="${esc(c.id)}">Excluir</button></div></td></tr>`).join('');
+        const rows=data.map(c=>`<tr><td><strong>${esc(c.name)}</strong><small class="muted-text"> ${esc(c.provider)}</small></td><td>${esc(c.model)}<small class="muted-text"> ${esc(c.resolved_protocol||c.protocol)}</small><small class="muted-text" data-llm-test-result role="status" aria-live="polite" hidden></small></td><td>${c.is_default?'<span class="badge badge-good">Padrão da empresa</span>':''}<span class="badge">${c.enabled?'Habilitada':'Desativada'}</span></td><td>${c.has_api_key?'Chave cadastrada':'Sem chave'}<small class="muted-text"> ${c.embedding_configured?'Busca configurada':'Busca precisa de configuração'}</small></td><td><div class="actions"><button class="small-button" data-llm-test="${esc(c.id)}">Testar modelo</button><button class="small-button" data-llm-edit="${esc(c.id)}">Editar</button>${!c.is_default?`<button class="small-button" data-llm-default="${esc(c.id)}">Definir padrão</button>`:''}<button class="small-button" data-llm-resume="${esc(c.id)}">Limpar pausa de erro</button><button class="small-button" data-llm-delete="${esc(c.id)}">Excluir</button></div></td></tr>`).join('');
         root.innerHTML=pageHead('Modelos IA','Cadastre provedores e escolha modelos por agente.',action)+
-          '<div class="inline-alert">Uma conexão cadastrada não confirma acesso ao modelo. O modelo principal e as alternativas são escolhidos na edição do agente. Configure a busca separadamente em Conhecimento. A configuração de embeddings aqui é mantida para compatibilidade. Nenhum teste com fornecedor é disparado ao salvar.</div>'+table(['Conexão','Modelo e protocolo','Uso','Credenciais e busca','Ações'],rows,'Adicione uma conexão. A primeira será o padrão da empresa.')+
+          '<div class="inline-alert">Ao salvar, o sistema faz um teste curto de acesso ao modelo. Você também pode testar conexões existentes nesta lista. O teste pode consumir cota e não altera modelo padrão, alternativas, pausa por erro ou configuração da busca. Configure embeddings separadamente em Conhecimento.</div>'+table(['Conexão','Modelo e protocolo','Uso','Credenciais e busca','Ações'],rows,'Adicione uma conexão. A primeira será o padrão da empresa.')+
           '<section class="card panel"><h2>Adicionar outros provedores</h2><p>Escolha “Outro provedor / personalizado”, informe um identificador, o endpoint HTTPS e um dos protocolos disponíveis. Você pode cadastrar novos modelos e várias chaves do mesmo fornecedor. Um protocolo diferente exige um novo adaptador, não apenas uma nova URL.</p></section>';
         $('#new-llm-connection',root).onclick=()=>connectionForm(null,providers,()=>render(root));
         $$('[data-llm-edit]',root).forEach(b=>b.onclick=()=>connectionForm(data.find(c=>c.id===b.dataset.llmEdit),providers,()=>render(root)));
+        $$('[data-llm-test]',root).forEach(b=>b.onclick=()=>testSavedConnection(b,b.dataset.llmTest));
         $$('[data-llm-default]',root).forEach(b=>b.onclick=()=>mutate(b,`/llm/connections/${encodeURIComponent(b.dataset.llmDefault)}/default`,'POST',root));
         $$('[data-llm-resume]',root).forEach(b=>b.onclick=()=>mutate(b,`/llm/connections/${encodeURIComponent(b.dataset.llmResume)}/resume`,'POST',root));
         $$('[data-llm-delete]',root).forEach(b=>b.onclick=async()=>{if(await askConfirm('Excluir esta conexão? Conexões padrão ou usadas por agentes não podem ser excluídas.',{title:'Excluir conexão',confirmLabel:'Excluir',danger:true}))mutate(b,`/llm/connections/${encodeURIComponent(b.dataset.llmDelete)}`,'DELETE',root);});
       }catch(e){if(getRoute()==='model')root.innerHTML=pageHead('Modelos IA','Conexões da empresa')+errorBox(e);}
     }
     async function mutate(button,path,method,root){button.disabled=true;try{await request(path,{method});await render(root);}catch(e){toast(e.message,'error');button.disabled=false;}}
+    function describeTest(result){
+      if(result.ok)return `Modelo ${result.model} respondeu (${result.elapsed_ms} ms).`;
+      const status=result.status_code?` · HTTP ${result.status_code}`:'';
+      return `Falha ao testar ${result.model}${status}: ${result.message} [${result.category}].`;
+    }
+    async function testSavedConnection(button,id){
+      const label=button.textContent;button.disabled=true;button.textContent='Testando…';
+      const resultBox=button.closest('tr')?.querySelector('[data-llm-test-result]');
+      try{const result=await request(`/llm/connections/${encodeURIComponent(id)}/test`,{method:'POST'});const message=describeTest(result);if(resultBox){resultBox.hidden=false;resultBox.textContent=message;resultBox.className=result.ok?'form-help':'inline-alert';resultBox.setAttribute('role',result.ok?'status':'alert');}toast(message,result.ok?'success':'error');}
+      catch(e){const message=`Não foi possível concluir o teste: ${e.message}`;if(resultBox){resultBox.hidden=false;resultBox.textContent=message;resultBox.className='inline-alert';resultBox.setAttribute('role','alert');}toast(message,'error');}
+      finally{if(button.isConnected){button.disabled=false;button.textContent=label;}}
+    }
     function connectionForm(row,providers,refresh){
       const c=row||{name:'',provider:'gemini',protocol:'gemini',base_url:'https://generativelanguage.googleapis.com/v1beta',model:'',enabled:true,max_output_tokens:2048,embedding_model:'text-embedding-3-small',embedding_base_url:''};
       const known=providers.presets.some(p=>p.id===c.provider);
@@ -37,8 +50,8 @@
         <div id="custom-provider-fields"><label class="field-label" for="connection-provider-id">Identificador do provedor</label><input class="field-control" id="connection-provider-id" name="provider_id" maxlength="40" pattern="[a-zA-Z0-9_.-]+" value="${esc(known?'':c.provider)}" placeholder="Ex.: meu-provedor"></div>
         <label class="field-label" for="connection-protocol">Protocolo da API</label><select class="field-control" id="connection-protocol" name="protocol">${providers.protocols.map(p=>`<option value="${esc(p.id)}">${esc(p.label)}</option>`).join('')}</select>
         <label class="field-label" for="connection-url">URL base HTTPS</label><input class="field-control" id="connection-url" name="base_url" type="url" maxlength="500" value="${esc(c.base_url)}" required><p class="form-help">Informe a raiz da API; não acrescente /chat/completions, /responses, /messages ou :generateContent. Ao alterar a URL, informe a chave novamente.</p>
-        <label class="field-label" for="connection-model">Identificador do modelo</label><input class="field-control" id="connection-model" name="model" maxlength="160" value="${esc(c.model)}" required><p class="form-help">Use o ID disponível na sua conta. No OpenRouter ele pode conter provedor/modelo. O cadastro não presume que o modelo esteja liberado ou homologado.</p>
-        <label class="field-label" for="connection-key">Chave da geração ${row?'(vazio preserva a atual)':''}</label><input class="field-control" id="connection-key" name="api_key" type="password" maxlength="1000" autocomplete="new-password" ${row?'':'required'}>
+        <label class="field-label" for="connection-model">Identificador do modelo</label><input class="field-control" id="connection-model" name="model" maxlength="160" value="${esc(c.model)}" required><p class="form-help">Use o ID disponível na sua conta. No OpenRouter ele pode conter provedor/modelo. Salvar testa o acesso com uma solicitação curta; o fornecedor pode contabilizá-la na cota.</p>
+        <label class="field-label" for="connection-key">Chave da geração ${row?'(vazio preserva a atual)':''}</label><input class="field-control" id="connection-key" name="api_key" type="password" maxlength="1000" autocomplete="new-password" ${row?'':'required'}><p class="form-help">O salvamento grava a configuração e depois testa o acesso. Se o teste falhar, os dados permanecem salvos para correção. Cada teste é uma chamada ao fornecedor e pode consumir cota.</p>
         <label class="field-label" for="connection-limit">Limite de tokens de saída</label><input class="field-control" id="connection-limit" name="max_output_tokens" type="number" min="128" max="32768" value="${esc(c.max_output_tokens)}" required>
         <label class="check-line"><input type="checkbox" name="enabled" ${c.enabled?'checked':''}> Habilitar esta conexão na cadeia de modelos</label>
         <details><summary>Busca nos documentos — embeddings</summary><p class="form-help">Configure a busca preferencialmente em Conhecimento → Configurar busca. Estes campos são usados apenas enquanto não existir uma configuração própria da base. Configure uma API compatível de embeddings de 1536 dimensões. Gemini/Claude nativos exigem URL separada. Alterar geração sem editar estes campos preserva a busca existente.</p>
@@ -46,7 +59,8 @@
           <label class="field-label" for="connection-embedding-model">Modelo de embeddings</label><input class="field-control" id="connection-embedding-model" name="embedding_model" value="${esc(c.embedding_model||'text-embedding-3-small')}" maxlength="160">
           <label class="field-label" for="connection-embedding-key">Chave de embeddings (vazio preserva a atual)</label><input class="field-control" id="connection-embedding-key" name="embedding_api_key" type="password" maxlength="1000" autocomplete="new-password"><p class="form-help">Ao mudar o endpoint, informe a chave de embeddings. Não reutilize uma chave de outro fornecedor. A mudança da busca com documentos indexados exige planejamento de reindexação.</p>
         </details>
-        <div class="form-actions"><button class="button button-secondary" type="button" data-close-modal>Cancelar</button><button class="button button-primary" type="submit">Salvar conexão</button></div>
+        <p class="form-help" id="connection-test-result" hidden role="status" aria-live="polite"></p>
+        <div class="form-actions"><button class="button button-secondary" type="button" data-close-modal>Cancelar</button><button class="button button-primary" type="submit">Salvar e testar modelo</button></div>
       </form>`);
       const f=$('#llm-connection-form');f.elements.preset.value=known?c.provider:'__custom__';f.elements.protocol.value=c.protocol||'auto';
       function customVisibility(){const custom=f.elements.preset.value==='__custom__';$('#custom-provider-fields',f).hidden=!custom;f.elements.provider_id.required=custom;}
@@ -63,7 +77,17 @@
           if(['gemini','anthropic'].includes(payload.protocol)&&!payload.embedding_base_url)throw new Error('Para a busca, informe uma URL separada de embeddings compatíveis.');
           if(String(fd.get('embedding_api_key')||'').trim())payload.embedding_api_key=String(fd.get('embedding_api_key')).trim();
         }
-        try{await request(row?`/llm/connections/${encodeURIComponent(row.id)}`:'/llm/connections',{method:row?'PUT':'POST',body:payload});closeModal();toast('Conexão salva. Nenhuma chamada ao provedor foi disparada.','success');refresh();}
+        try{
+          const saved=await request(row?`/llm/connections/${encodeURIComponent(row.id)}`:'/llm/connections',{method:row?'PUT':'POST',body:payload});
+          const connectionId=row?.id||saved.id;const resultBox=$('#connection-test-result',f);resultBox.hidden=false;resultBox.setAttribute('role','status');resultBox.textContent='Conexão salva. Testando o acesso ao modelo…';
+          const submit=f.querySelector('[type="submit"]');submit.textContent='Testando modelo…';
+          let result;
+          try{result=await request(`/llm/connections/${encodeURIComponent(connectionId)}/test`,{method:'POST'});}
+          catch(error){resultBox.className='inline-alert';resultBox.setAttribute('role','alert');resultBox.textContent=`Conexão salva, mas o teste não pôde ser concluído: ${error.message}`;refresh();return;}
+          resultBox.className=result.ok?'form-help':'inline-alert';resultBox.setAttribute('role',result.ok?'status':'alert');resultBox.textContent=describeTest(result);
+          if(result.ok){closeModal();toast(describeTest(result),'success');refresh();}
+          else{toast('Conexão salva, mas o teste do modelo falhou. Veja o motivo no formulário.','error');refresh();}
+        }
         finally{payload.api_key='';payload.embedding_api_key='';fd.set('api_key','');fd.set('embedding_api_key','');}
       });
     }

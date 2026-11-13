@@ -6,9 +6,34 @@ from app.models import Agent, LLMConfig, ModelRun, KnowledgeDocument, KnowledgeS
 from app.schemas import LLMConfigUpsert
 from app.provider_catalog import catalog
 from app.embedding_config import embedding_spec
-from app.llm_client import resolved_protocol
+from app.llm_client import LLMError, complete, resolved_protocol
 from app.security import encrypt_secret
+from time import monotonic
 router = APIRouter(prefix="/api/llm", tags=["provedores de IA"])
+
+_TEST_ERROR_MESSAGES={
+    'authentication':'O fornecedor recusou a autenticação. Confira a chave e se o modelo está liberado para esta conta.',
+    'quota':'O fornecedor indicou limite ou saldo insuficiente.',
+    'rate_limit':'O fornecedor limitou as requisições. Aguarde e tente novamente.',
+    'unavailable':'O fornecedor não respondeu dentro do prazo ou está indisponível.',
+    'context_length':'O fornecedor recusou o tamanho do teste.',
+    'output_limit':'O fornecedor respondeu, mas limitou a saída do teste.',
+    'safety':'O fornecedor bloqueou a resposta de teste.',
+    'unsafe_destination':'A URL desta conexão não passou na validação de segurança.',
+    'invalid_request':'O fornecedor recusou o protocolo, modelo ou formato da requisição.',
+    'invalid_response':'O fornecedor respondeu em um formato inesperado.',
+    'configuration':'A conexão está incompleta para testar o modelo.',
+}
+
+def _test_result(*,ok,model,started,category=None,status_code=None):
+    result={'ok':ok,'model':model,'elapsed_ms':round((monotonic()-started)*1000)}
+    if ok:
+        result['message']='O modelo respondeu ao teste.'
+    else:
+        result['category']=category or 'invalid_response'
+        result['status_code']=status_code or None
+        result['message']=_TEST_ERROR_MESSAGES.get(result['category'],'Não foi possível validar a conexão. Revise os dados e tente novamente.')
+    return result
 
 def _require_admin(user):
     if user.role not in {"platform_admin","tenant_admin"}: raise HTTPException(403,"Ação restrita a administradores")
@@ -78,6 +103,32 @@ def create_connection(payload:LLMConfigUpsert,db:DbSession,tenant_id:TenantId,us
 @serialized_mutation
 def update_connection(config_id:str,payload:LLMConfigUpsert,db:DbSession,tenant_id:TenantId,user:CurrentUser):
     _require_admin(user);return _save(db,tenant_id,payload,_get(db,tenant_id,config_id))
+
+@router.post("/connections/{config_id}/test")
+def test_connection(config_id:str,db:DbSession,tenant_id:TenantId,user:CurrentUser):
+    """Probe a saved generation connection without persisting the provider result."""
+    _require_admin(user)
+    row=_get(db,tenant_id,config_id)
+    started=monotonic()
+    from app.security import decrypt_secret
+    api_key=decrypt_secret(row.api_key_encrypted)
+    if not api_key:
+        return _test_result(ok=False,model=row.model,started=started,category='configuration')
+    try:
+        answer=complete(
+            row.provider,row.base_url,row.model,api_key,
+            'Este é um teste técnico de conexão. Responda somente com: OK.',
+            [{'role':'user','content':'Responda somente: OK'}],
+            protocol=row.protocol,max_output_tokens=64,
+        )
+        if not answer.strip():
+            return _test_result(ok=False,model=row.model,started=started,category='invalid_response')
+        return _test_result(ok=True,model=row.model,started=started)
+    except LLMError as exc:
+        return _test_result(ok=False,model=row.model,started=started,category=exc.category,status_code=exc.status_code)
+    except Exception:
+        # Never echo provider bodies, URLs, keys, or exception text to the client.
+        return _test_result(ok=False,model=row.model,started=started,category='invalid_response')
 
 @router.post("/connections/{config_id}/default")
 @serialized_mutation
