@@ -32,6 +32,43 @@ def test_new_provider_brands_need_no_schema_or_adapter_when_protocol_matches(mon
     assert calls[0][1]['json']['model']=='vendor/new-model'
 
 
+@pytest.mark.parametrize('label,provider,protocol,base_url,model,expected_url', [
+    ('NVIDIA - Mistral Large 4', 'openai-compatible', 'chat-completions', 'https://integrate.api.nvidia.com/v1', 'mistralai/mistral-large-4-1t-a52b', 'https://integrate.api.nvidia.com/v1/chat/completions'),
+    ('Gemini', 'gemini', 'gemini', 'https://generativelanguage.googleapis.com/v1beta', 'gemini-3.5-flash-lite', 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent'),
+    ('Groq', 'groq', 'chat-completions', 'https://api.groq.com/openai/v1', 'qwen/qwen3.8-27b', 'https://api.groq.com/openai/v1/chat/completions'),
+    ('OpenRouter', 'openrouter', 'chat-completions', 'https://openrouter.ai/api/v1', 'openrouter/free', 'https://openrouter.ai/api/v1/chat/completions'),
+    ('Gemini Gemma', 'gemini', 'gemini', 'https://generativelanguage.googleapis.com/v1beta', 'gemma-4-31b-it', 'https://generativelanguage.googleapis.com/v1beta/models/gemma-4-31b-it:generateContent'),
+    ('NVIDIA - Step 5', 'openai-compatible', 'chat-completions', 'https://integrate.api.nvidia.com/v1', 'stepfun-ai/step-5-preview', 'https://integrate.api.nvidia.com/v1/chat/completions'),
+    ('NVIDIA - DeepSeek Flash', 'openai-compatible', 'chat-completions', 'https://integrate.api.nvidia.com/v1', 'deepseek-ai/deepseek-v4.1-flash', 'https://integrate.api.nvidia.com/v1/chat/completions'),
+    ('NVIDIA - Nemotron Lightning', 'openai-compatible', 'chat-completions', 'https://integrate.api.nvidia.com/v1', 'nvidia/nemotron-3.5-lightning-30b-a3b', 'https://integrate.api.nvidia.com/v1/chat/completions'),
+    ('NVIDIA - GPT OSS', 'openai-compatible', 'chat-completions', 'https://integrate.api.nvidia.com/v1', 'openai/gpt-oss-20b', 'https://integrate.api.nvidia.com/v1/chat/completions'),
+])
+def test_current_panel_models_follow_their_saved_protocol_contract_without_live_calls(
+    monkeypatch, label, provider, protocol, base_url, model, expected_url,
+):
+    calls=[]
+    monkeypatch.setattr('app.llm_client.validate_public_https',lambda _:None)
+
+    def fake_post(url, **kwargs):
+        calls.append((url,kwargs))
+        if protocol=='gemini':
+            return httpx.Response(200,json={'candidates':[{'content':{'parts':[{'text':'synthetic answer'}]},'finishReason':'STOP'}]})
+        return httpx.Response(200,json={'choices':[{'message':{'content':'synthetic answer'},'finish_reason':'stop'}]})
+
+    monkeypatch.setattr('app.llm_client.httpx.post',fake_post)
+    result=complete(provider,base_url,model,'synthetic-key','synthetic instructions',
+                    [{'role':'user','content':'synthetic request'}],protocol=protocol,max_output_tokens=64)
+
+    assert result=='synthetic answer', label
+    assert len(calls)==1
+    assert calls[0][0]==expected_url
+    payload=calls[0][1]['json']
+    assert (payload['contents'][0]['parts'][0]['text'] if protocol=='gemini'
+            else payload['messages'][1]['content'])=='synthetic request'
+    if protocol!='gemini':
+        assert payload['model']==model
+
+
 def test_protocol_is_explicit_independent_of_provider_brand():
     assert resolved_protocol('custom-relay','gemini')=='gemini'
     with pytest.raises(ValidationError):LLMConfigUpsert(provider='custom',protocol='unimplemented-protocol',base_url='https://synthetic.invalid',model='synthetic')
@@ -80,4 +117,5 @@ def test_wrong_embedding_dimensions_are_rejected(monkeypatch,size):
     from app.embedding_client import embed_texts
     monkeypatch.setattr('app.embedding_client.validate_public_https',lambda _:None)
     monkeypatch.setattr('app.embedding_client.httpx.post',lambda *a,**k:httpx.Response(200,json={'data':[{'embedding':[1.0]*size}]}))
-    with pytest.raises(LLMError):embed_texts('https://synthetic.invalid/v1','synthetic','synthetic',['Synthetic'])
+    with pytest.raises(LLMError,match='1536 dimensões por trecho'):
+        embed_texts('https://synthetic.invalid/v1','synthetic','synthetic',['Synthetic'])

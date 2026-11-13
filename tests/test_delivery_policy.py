@@ -44,6 +44,7 @@ def test_delivery_never_regresses_from_read_to_sent_or_failure():
 @pytest.mark.parametrize('status,body,category,fallback', [
     (429, {'error': {'code': 'insufficient_quota'}}, 'quota', True),
     (429, {}, 'rate_limit', True),
+    (402, {}, 'quota', True),
     (401, {}, 'authentication', True),
     (503, {}, 'unavailable', True),
     (400, {'error': {'code': 'content_policy_violation'}}, 'safety', False),
