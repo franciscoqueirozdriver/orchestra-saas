@@ -4,6 +4,14 @@ Atualizado em 11/11/2026. A pasta local é o ambiente de desenvolvimento;
 GitHub `main` é a fonte compartilhada; `/opt/orquestra` é o checkout de publicação.
 Não editar código diretamente na VPS nem sincronizar mudanças dela de volta.
 
+**Último release confirmado em 13/11/2026:** SHA
+`33c92680c5df22978b0f33ba34a15060b3ac0493`, após PRs #12 e #13. A VPS partiu de
+`702827502f534c39fc2dd8daeaefbe098b40accf`; o checkout ficou limpo e o banco
+permaneceu em `0012_conversation_memory`, sem migration. API, worker e scheduler
+compartilharam a imagem `sha256:dbfa96a05539f69346569fdc5782b46c8b2c5b1fac711ea533579078a192f7cd`;
+Redis respondeu, `/health` e a página pública retornaram sucesso. O envio global
+permaneceu desligado. Consulte `docs/handoff/2026-11-13-teste-conexao-modelo.md`.
+
 ## Estado publicado
 
 Na publicação de 11/11/2026, o helper sincronizou o código e depois a atualização do

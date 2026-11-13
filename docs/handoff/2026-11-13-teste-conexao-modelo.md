@@ -1,7 +1,7 @@
 # Handoff — teste de acesso ao modelo no cadastro
 
 **Data:** 13/11/2026
-**Branch:** `feat/test-llm-connection-on-save`
+**Branch de implementação:** `feat/test-llm-connection-on-save`
 **Base local:** `main`, SHA `702827502f534c39fc2dd8daeaefbe098b40accf`
 **Escopo:** testar a conexão de geração após salvar e permitir repetir o teste em
 uma conexão já cadastrada. Não muda modelo padrão, principal/fallback dos agentes,
@@ -69,10 +69,32 @@ perder a possibilidade de editar credenciais/modelo. O teste não prova qualidad
 resposta nem disponibilidade futura. O endpoint não cria uma tentativa do histórico
 de atendimento e deve continuar separado do fluxo de mensagens.
 
-Estado Git no momento deste handoff: alterações locais não commitadas nesta branch;
-sem push, merge ou deploy. Nenhuma alteração de banco/produção foi feita. A próxima
-ação operacional autorizada é revisar, commitar, publicar em `main` e seguir o
-procedimento documentado de release com SHA completo, backup, verificação do
-checkout/versão anterior e confirmação de que não há migration. A proposta de padrão
-global herdado ao criar agente, com personalização por agente e pesquisa dos modelos
-por tarefa, deve permanecer em planejamento separado.
+## Publicação
+
+- PR #12 foi integrada primeiro em `09bc61e96f004ade9dd790784469c4a08b17e70b`;
+  PR #13 foi então integrada em `33c92680c5df22978b0f33ba34a15060b3ac0493`.
+- Os checks `test`, `ui` e `migrations` passaram para a versão integrada. A suíte
+  Python 3.12/PostgreSQL descartável reportou 311 aprovados e 2 skips antes da última
+  alteração somente de frontend; os testes de UI passaram no SHA integrado.
+- VPS `/opt/orquestra`: checkout limpo no SHA `33c92680c5df22978b0f33ba34a15060b3ac0493`.
+  Revisão Alembic permaneceu `0012_conversation_memory`; nenhuma migration foi
+  executada. API, worker e scheduler compartilham a imagem
+  `sha256:dbfa96a05539f69346569fdc5782b46c8b2c5b1fac711ea533579078a192f7cd`, com
+  label do SHA alvo. Web, API e serviços dependentes ficaram saudáveis; worker
+  respondeu ao ping Celery, Redis respondeu `PONG`, `/health` retornou sucesso e a
+  página pública HTTP 200. O código servido contém a rotina `renewSession`.
+- A saída global foi observada como `false`. Nenhuma mensagem WhatsApp foi enviada.
+- O release helper criou backup operacional cifrado em
+  `/home/orquestra/orchestra-preservacao/publicacao-20261105T214148Z/operational-backups`;
+  criou recibo privado em `/home/orquestra/orchestra-releases/20261113T181644Z`.
+  O helper guardou a imagem anterior para rollback; o digest anterior foi
+  `sha256:34365f779e7f9905125d5ca7e4036c59c4e222e6b7c2c9d80f406ce1bd233fc4`.
+- A renovação foi validada com navegador/API sintéticos e a presença do bundle foi
+  observada em produção. Uma sessão real não foi testada porque não foram fornecidas
+  credenciais de usuário; peça para a pessoa testar a plataforma. Após mais de 30
+  minutos sem atividade, token expirado ou rotação de chave JWT, novo login ainda é
+  esperado.
+
+A proposta de padrão global herdado ao criar agente, com personalização por agente e
+pesquisa dos modelos por tarefa, permanece como trabalho separado; nada nesta entrega
+altera modelos padrão, principais/fallbacks ou configuração da ferramenta.

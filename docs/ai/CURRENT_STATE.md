@@ -1,13 +1,15 @@
 # Estado atual comprovado no repositório
 
-**Sessão da plataforma — implementação local nesta branch:** o access token JWT é
+**Sessão da plataforma — publicada em 13/11/2026:** o access token JWT é
 curto (30 min padrão, configurável por `ACCESS_TOKEN_MINUTES`). O frontend agora
 renova por `/api/auth/me` quando a página está visível e houve atividade recente,
 e tenta renovar/repetir uma única vez uma chamada que recebe 401. `/auth/me` exige
 token ainda válido; após expiração completa, inatividade prolongada ou mudança da
 chave JWT, um novo login continua necessário. Ver `frontend/app.js`,
 `backend/app/routes_auth.py` e o handoff `2026-11-13-teste-conexao-modelo.md`.
-Ainda não publicado nem verificado em produção.
+O código foi publicado no SHA `33c92680c5df22978b0f33ba34a15060b3ac0493`; o código
+servido e o health HTTPS foram conferidos. A renovação foi testada com API sintética,
+mas não foi possível confirmar uma sessão real de usuário sem credenciais de login.
 
 **Nota de desenvolvimento local — 12/11/2026:** a revisão-base local desta etapa é
 `465d6b3e2185d1714bdbbde59383bda94c0b4b40`. A branch isolada
