@@ -19,6 +19,7 @@ não os transforma em retrato atual. Atualize-o ao adicionar handoffs relevantes
 | [`docs/handoff/2026-11-12-revisao-memoria-e-avaliacao.md`](../handoff/2026-11-12-revisao-memoria-e-avaliacao.md) | Cursor de resumo com desempate estável, autorização para excluir fatos comerciais e corpus sintético de avaliação de respostas | Branch local `test/conversational-core-onda1`; commit inicial `725679e`, alterações ainda não commitadas/não publicadas |
 | [`docs/handoff/2026-11-13-teste-conexao-modelo.md`](../handoff/2026-11-13-teste-conexao-modelo.md) | Teste curto ao salvar conexão, renovação da sessão de login e publicação | PRs #12/#13 integradas; SHA `33c9268` publicado na VPS. A renovação foi testada sinteticamente; sessão de usuário real permanece sem validação |
 | [`docs/handoff/2026-11-13-configuracao-provedores.md`](../handoff/2026-11-13-configuracao-provedores.md) | Registro de configuração de provedores, papéis compartilhados do OpenRouter, limites observados e testes sintéticos | Branch `feat/provider-config-reproducibility`; não altera seleção de modelos nem dados de produção; conferir estado Git/PR antes de usar como atual |
+| [`docs/handoff/2026-11-13-planejamento-roteamento-modelos.md`](../handoff/2026-11-13-planejamento-roteamento-modelos.md) | Proposta de alternativas padrão da empresa, cópia da conexão escolhida pelo usuário ao criar agente e avaliação documental dos nove modelos | Plano não implementado; branch `plan/company-model-routing`; conferir aprovação e Git antes de executar |
 
 O handoff de 06/11 evoluiu em commits `d8d04b3`, `a07dc7d` e `621d926` (importação
 histórica), culminando no arquivo atual. Use `git show <commit>:<caminho>` se for
@@ -48,6 +49,7 @@ handoffs independentes.
 - Histórico de conversa e ingestão privada: arquivos `docs/conhecimento/`, `docs/historico-whatsapp.md` e handoff 06/11. Material bruto é privado e não deve ser lido por padrão.
 - Atendimento e migrations propostas de A Mesa: `docs/intencoes/atendimento-natural-a-mesa/`; documentos e código proposto ali não significam que tudo foi incorporado.
 - Intervenção humana: `docs/intervencao-humana-grupo.md` e implementação referenciada em `CURRENT_STATE.md`.
+- Rota de geração empresa/agente: [`docs/planos/2026-11-13-roteamento-modelos-empresa-e-agentes.md`](../planos/2026-11-13-roteamento-modelos-empresa-e-agentes.md); proposta não implementada. A conexão principal continua sendo escolhida pelo usuário em Modelo IA.
 - WhatsApp: `docs/conexoes-whatsapp.md`; verificar sua data e contrastar com código/contrato externo.
 
 ## Outros documentos históricos/temáticos
