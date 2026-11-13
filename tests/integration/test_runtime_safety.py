@@ -388,6 +388,151 @@ def test_model_fallback_reuses_same_context_and_success_is_cached(runtime):
         assert exc.value.category == 'stale_context'
 
 
+def test_five_provider_chain_keeps_panel_order_and_skips_cooldown_and_quota_auth_errors(runtime):
+    from datetime import datetime, timedelta, timezone
+    from app.models import Agent, Conversation, LLMConfig, ModelRun
+    from app.security import encrypt_secret
+    from app.model_router import candidate_configs, generate_with_fallback
+    from app.llm_client import LLMError
+
+    ordered = [
+        ('chain-groq', 'Groq', 'groq', 'chat-completions', 'https://api.groq.com/openai/v1', 'qwen/qwen3.8-27b'),
+        ('chain-gemini', 'Gemini', 'gemini', 'gemini', 'https://generativelanguage.googleapis.com/v1beta', 'gemini-3.5-flash-lite'),
+        ('chain-mistral', 'Mistral', 'mistral', 'chat-completions', 'https://api.mistral.ai/v1', 'mistral-small-latest'),
+        ('chain-gemma', 'Gemini Gemma', 'gemini', 'gemini', 'https://generativelanguage.googleapis.com/v1beta', 'gemma-4-31b-it'),
+        ('chain-openrouter', 'OpenRouter', 'openrouter', 'chat-completions', 'https://openrouter.ai/api/v1', 'openrouter/free'),
+    ]
+    calls = []
+
+    def client(provider, base, model, key, instructions, history, **kwargs):
+        calls.append((provider, model))
+        if model == 'qwen/qwen3.8-27b':
+            raise LLMError('synthetic quota', category='quota', status_code=429)
+        if model == 'mistral-small-latest':
+            raise LLMError('synthetic quota', category='quota', status_code=402)
+        if model == 'gemma-4-31b-it':
+            raise LLMError('synthetic authentication', category='authentication', status_code=401)
+        return 'synthetic OpenRouter answer'
+
+    with runtime.db() as db:
+        configs = []
+        for identifier, name, provider, protocol, base_url, model in ordered:
+            configs.append(LLMConfig(
+                id=identifier, tenant_id='tenant-a', name=name, provider=provider,
+                protocol=protocol, base_url=base_url, model=model,
+                embedding_model='synthetic-embedding',
+                api_key_encrypted=encrypt_secret('test-only-' + identifier),
+            ))
+        configs[1].cooldown_until = datetime.now(timezone.utc) + timedelta(hours=1)
+        db.add_all(configs)
+        agent = db.get(Agent, 'agent-a')
+        agent.llm_config_id = ordered[0][0]
+        agent.fallback_config_ids = [row[0] for row in ordered[1:]]
+        db.commit()
+
+        assert [row.id for row in candidate_configs(db, agent)] == [row[0] for row in ordered]
+        result = generate_with_fallback(
+            db, agent, db.get(Conversation, 'conversation-a'),
+            'synthetic instructions', [{'role': 'user', 'content': 'synthetic request'}], client=client,
+        )
+
+        assert result == 'synthetic OpenRouter answer'
+        assert calls == [
+            ('groq', 'qwen/qwen3.8-27b'),
+            ('mistral', 'mistral-small-latest'),
+            ('gemini', 'gemma-4-31b-it'),
+            ('openrouter', 'openrouter/free'),
+        ]
+        run = db.query(ModelRun).one()
+        assert [(attempt['model'], attempt['result'], attempt.get('http_status'))
+                for attempt in run.attempts] == [
+            ('qwen/qwen3.8-27b', 'quota', 429),
+            ('gemini-3.5-flash-lite', 'cooldown', None),
+            ('mistral-small-latest', 'quota', 402),
+            ('gemma-4-31b-it', 'authentication', 401),
+            ('openrouter/free', 'succeeded', None),
+        ]
+
+
+def test_openrouter_connection_can_be_shared_between_generation_fallback_and_search(runtime):
+    from app.models import Agent, Conversation, KnowledgeSearchConfig, LLMConfig
+    from app.schemas import KnowledgeSearchUpsert
+    from app.routes_knowledge import get_search_settings, save_search_settings
+    from app.embedding_config import knowledge_embedding_config
+    from app.model_router import candidate_configs, generate_with_fallback
+    from app.llm_client import LLMError
+    from app.security import decrypt_secret, encrypt_secret
+
+    calls = []
+
+    def client(provider, base, model, key, instructions, history, **kwargs):
+        calls.append((provider, model, key))
+        if provider == 'groq':
+            raise LLMError('synthetic rate limit', category='rate_limit', status_code=429)
+        return 'synthetic OpenRouter response'
+
+    with runtime.db() as db:
+        primary = LLMConfig(
+            id='dual-role-primary', tenant_id='tenant-a', name='Synthetic primary',
+            provider='groq', protocol='chat-completions',
+            base_url='https://api.groq.com/openai/v1', model='synthetic-primary',
+            embedding_model='synthetic-embedding',
+            api_key_encrypted=encrypt_secret('test-only-primary-key'),
+        )
+        shared = db.get(LLMConfig, 'model-a')
+        shared.name = 'OpenRouter shared test connection'
+        shared.provider = 'openrouter'
+        shared.protocol = 'chat-completions'
+        shared.base_url = 'https://openrouter.ai/api/v1'
+        shared.model = 'openrouter/free'
+        shared.is_default = False
+        db.add(primary)
+        agent = db.get(Agent, 'agent-a')
+        agent.llm_config_id = primary.id
+        agent.fallback_config_ids = [shared.id]
+        db.commit()
+
+        saved = KnowledgeSearchUpsert(
+            connection_id=shared.id, model='openai/text-embedding-3-small',
+        )
+        first = save_search_settings(saved, db, 'tenant-a', runtime.admin)
+        second = save_search_settings(saved, db, 'tenant-a', runtime.admin)
+        assert first['source'] == second['source'] == 'connection'
+        assert first['dimensions'] == second['dimensions'] == 1536
+        assert db.query(KnowledgeSearchConfig).filter_by(tenant_id='tenant-a').count() == 1
+        assert db.get(KnowledgeSearchConfig, 'tenant-a').connection_id == shared.id
+        assert knowledge_embedding_config(db, 'tenant-a') == (
+            'https://openrouter.ai/api/v1', 'openai/text-embedding-3-small',
+            decrypt_secret(shared.api_key_encrypted),
+        )
+
+        answer = generate_with_fallback(
+            db, agent, db.get(Conversation, 'conversation-a'), 'synthetic instructions',
+            [{'role': 'user', 'content': 'synthetic request'}], client=client,
+        )
+        assert answer == 'synthetic OpenRouter response'
+        assert [(provider, model) for provider, model, _ in calls] == [
+            ('groq', 'synthetic-primary'), ('openrouter', 'openrouter/free'),
+        ]
+        assert calls[1][2] == knowledge_embedding_config(db, 'tenant-a')[2]
+
+        # Unlinking one role must leave the other role intact.
+        agent.fallback_config_ids = []
+        db.commit()
+        assert [row.id for row in candidate_configs(db, agent)] == [primary.id]
+        assert get_search_settings(db, 'tenant-a')['connection_id'] == shared.id
+        assert knowledge_embedding_config(db, 'tenant-a')[1] == 'openai/text-embedding-3-small'
+
+        agent.fallback_config_ids = [shared.id]
+        db.commit()
+        save_search_settings(KnowledgeSearchUpsert(
+            base_url='https://openrouter.ai/api/v1',
+            model='openai/text-embedding-3-small', api_key='test-only-search-key',
+        ), db, 'tenant-a', runtime.admin)
+        assert get_search_settings(db, 'tenant-a')['source'] == 'dedicated'
+        assert [row.id for row in candidate_configs(db, agent)] == [primary.id, shared.id]
+
+
 def test_model_fallback_rejects_invalid_visit_envelope_before_accepting_provider(runtime):
     from app.models import Agent, Conversation, LLMConfig, ModelRun
     from app.security import encrypt_secret
