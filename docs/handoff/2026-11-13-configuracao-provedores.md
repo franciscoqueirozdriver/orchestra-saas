@@ -109,6 +109,11 @@ mínima, não qualidade, estabilidade, política de quota nem compatibilidade co
 respostas comerciais reais. Os modelos com timeout, HTTP 500 e HTTP 401 exigem
 revisão separada no painel do fornecedor antes de serem considerados utilizáveis.
 
+Também foi feito um probe separado do endpoint de embeddings selecionado em
+Conhecimento, usando um único texto sintético, sem indexar nem persistir: `openai/text-embedding-3-small`
+retornou vetor com **1536 dimensões** em 416 ms. Isso confirma o contrato técnico
+do embedding no momento do teste, não indexa nem reprocessa documentos.
+
 ## Próximo trabalho separado
 
 O responsável definiu a direção para uma tarefa posterior: manter principal e
