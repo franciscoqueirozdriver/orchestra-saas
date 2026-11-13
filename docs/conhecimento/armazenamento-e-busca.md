@@ -51,6 +51,22 @@ normalizados. O nome do modelo de conversa não é usado para indexar documentos
 Outros fornecedores precisam oferecer embeddings compatíveis; selecionar uma
 conexão não confirma modelo, quota ou disponibilidade real.
 
+Uma conexão OpenRouter pode servir simultaneamente como alternativa de geração
+de um agente e como conexão de busca. Os vínculos são independentes e reutilizam
+a chave cifrada da conexão: remover OpenRouter da lista de alternativas não
+desconfigura a busca, e reconfigurar a busca não altera a lista do agente. A
+exclusão da conexão é recusada enquanto qualquer vínculo estiver ativo. Configure
+`openai/text-embedding-3-small` como modelo de busca somente se a conta/provedor
+confirmar acesso a embeddings com 1536 dimensões; o modelo `openrouter/free` de
+geração não é o modelo de embeddings.
+
+Limites externos variam por modelo/endpoint e plano. Na documentação atual,
+tentativas falhas de modelos gratuitos OpenRouter contam para a cota diária de
+requisições gratuitas, mas não são cobradas como tokens de inferência. Isso não
+permite concluir que uma chamada de embeddings consuma a mesma cota do modelo
+gratuito. Verifique uso e limites no painel da conta OpenRouter antes de atribuir
+consumo a uma das duas funções. Consulte também [provedores de IA](../provedores-ia.md).
+
 A conexão não pode ser excluída enquanto estiver vinculada à busca. Desativação
 ou mudança de endpoint faz a busca recusar o uso até revisão; não encaminha uma
 chave automaticamente para um novo destino. Mudança de espaço vetorial com
