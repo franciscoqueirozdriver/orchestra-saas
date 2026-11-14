@@ -1539,6 +1539,29 @@ def test_document_index_failure_preserves_text_and_retries(runtime,monkeypatch):
         assert exc.value.status_code==403
 
 
+def test_document_delete_removes_its_chunks_and_preserves_other_tenants(runtime):
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+    from app import routes_knowledge as api
+    from app.models import KnowledgeChunk, KnowledgeDocument
+    with runtime.db() as db:
+        own=KnowledgeDocument(tenant_id='tenant-a',filename='own.txt',status='indexed',extracted_text='Synthetic own')
+        other=KnowledgeDocument(tenant_id='tenant-b',filename='other.txt',status='indexed',extracted_text='Synthetic other')
+        db.add_all([own,other]);db.flush()
+        db.add_all([
+            KnowledgeChunk(tenant_id='tenant-a',document_id=own.id,content='Synthetic chunk A',embedding=[0.0]*1536,embedding_model='synthetic'),
+            KnowledgeChunk(tenant_id='tenant-b',document_id=other.id,content='Synthetic chunk B',embedding=[0.0]*1536,embedding_model='synthetic'),
+        ]);db.commit()
+        api.delete_document(own.id,db,'tenant-a',runtime.admin)
+        assert db.get(KnowledgeDocument,own.id) is None
+        assert db.query(KnowledgeChunk).filter_by(document_id=own.id).count()==0
+        assert db.get(KnowledgeDocument,other.id) is not None
+        assert db.query(KnowledgeChunk).filter_by(document_id=other.id,tenant_id='tenant-b').count()==1
+        with pytest.raises(HTTPException) as exc:
+            api.delete_document(other.id,db,'tenant-a',SimpleNamespace(role='tenant_admin'))
+        assert exc.value.status_code==404
+
+
 def test_document_index_concurrent_requests_do_not_duplicate(runtime,monkeypatch):
     import asyncio
     from io import BytesIO
