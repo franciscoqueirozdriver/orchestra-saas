@@ -9,7 +9,7 @@ const server=http.createServer((req,res)=>{const f=files[req.url];if(!f){res.wri
  const browser=await chromium.launch({executablePath:process.env.CHROME_PATH||'/usr/bin/google-chrome',headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
  try{
   const page=await browser.newPage();const errors=[],external=[],mutations=[];page.on('pageerror',e=>errors.push(e.message));
-  let saved=false,indexed=false,configured=false;const calls=[],payloads=[];
+  let saved=false,indexed=false,configured=false,deleted=false;const calls=[],payloads=[];
   await page.route('**/*',async route=>{
    const req=route.request(),u=new URL(req.url());if(u.origin!==origin){external.push(u.hostname);return route.abort();}if(!u.pathname.startsWith('/api/'))return route.continue();
    calls.push([req.method(),u.pathname]);let data,status=200;
@@ -21,11 +21,13 @@ const server=http.createServer((req,res)=>{const f=files[req.url];if(!f){res.wri
    }else if(u.pathname==='/api/knowledge/documents/doc-a/index'){
     if(!configured){status=409;data={detail:'Configure a busca na base de conhecimento antes de indexar'};}
     else{indexed=true;data={status:'indexed'};}
+   }else if(u.pathname==='/api/knowledge/documents/doc-a'&&req.method()==='DELETE'){
+    deleted=true;saved=false;indexed=false;status=204;data=null;
    }else if(u.pathname==='/api/knowledge/documents'){
     if(req.method()==='POST'){saved=true;data={id:'doc-a',status:'pending_index'};status=201;}
-    else data=saved?[{id:'doc-a',filename:'synthetic.txt',mime_type:'text/plain',status:indexed?'indexed':'pending_index'}]:[];
+    else data=saved&&!deleted?[{id:'doc-a',filename:'synthetic.txt',mime_type:'text/plain',status:indexed?'indexed':'pending_index'}]:[];
    }else throw new Error('Unexpected API '+u.pathname);
-   await route.fulfill({status,contentType:'application/json',body:JSON.stringify(data)});
+   await route.fulfill({status,contentType:'application/json',body:status===204?'':JSON.stringify(data)});
   });
   await page.addInitScript(()=>{sessionStorage.setItem('zapia_token','synthetic');sessionStorage.setItem('zapia_role','tenant_admin');sessionStorage.setItem('zapia_tenant_id','tenant-a');});
   await page.goto(origin);await page.locator('[data-route="knowledge"]').click();
@@ -42,7 +44,15 @@ const server=http.createServer((req,res)=>{const f=files[req.url];if(!f){res.wri
   await page.getByRole('button',{name:'Salvar configuração',exact:true}).click();await page.waitForFunction(()=>!document.querySelector('#modal').open);
   await page.getByRole('button',{name:'Indexar para busca'}).click();await page.locator('#confirm-dialog').waitFor({state:'visible'});await page.locator('#confirm-ok').click();await page.getByText('Disponível para busca',{exact:true}).waitFor();
   assert.equal(await page.getByRole('button',{name:'Indexar para busca'}).count(),0);
+  const deleteButton=page.getByRole('button',{name:'Excluir',exact:true});await deleteButton.waitFor();
+  await deleteButton.click();await page.locator('#confirm-dialog').waitFor({state:'visible'});
+  assert.match(await page.locator('#confirm-message').textContent(),/documento e todos os seus trechos serão removidos da busca/);
+  await page.locator('#confirm-cancel').click();await page.locator('#confirm-dialog').waitFor({state:'hidden'});
+  assert.equal(deleted,false);await page.getByRole('button',{name:'Excluir',exact:true}).waitFor();
+  await page.getByRole('button',{name:'Excluir',exact:true}).click();await page.locator('#confirm-dialog').waitFor({state:'visible'});await page.locator('#confirm-ok').click();
+  await page.getByText('Envie documentos para compor a base.').waitFor();assert.equal(deleted,true);
+  assert.equal(calls.filter(c=>c[0]==='DELETE'&&c[1]==='/api/knowledge/documents/doc-a').length,1);
   assert.deepEqual(payloads,[{model:'gemini-embedding-001',connection_id:'google-a'}]);assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
-  console.log('UI conhecimento aprovada: salvar sem IA, pendência, configuração própria e indexação explícita.');
+  console.log('UI conhecimento aprovada: salvar sem IA, indexação explícita, confirmação/cancelamento de exclusão e remoção.');
  }finally{await browser.close();server.close();}
 })().catch(e=>{console.error(e);server.close();process.exitCode=1;});
